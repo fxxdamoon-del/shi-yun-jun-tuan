@@ -481,7 +481,7 @@ const G = {
   towerHp: 100, towerMax: 100, baseGold: 5, interestCap: 5, rerolls: 0,
   speedMul: 1, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
   field: [], bench: [null, null, null, null, null], shop: [], enemies: [],
-  hitStopUntil: 0, dragUnit: null, spinBusy: false
+  hitStopUntil: 0, dragUnit: null, diceBusy: false
 };
 
 let UID = 1;
@@ -644,21 +644,26 @@ Object.assign(GameScene.prototype, {
   },
 
   buildBottom() {
-    // ---- 左：转盘 ----
+    // ---- 左：掷骰召唤 ----
     this.add.rectangle(16, 496, 288, 176, 0x241f30).setOrigin(0, 0);
-    this.add.text(30, 512, '转盘 · 3金', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' });
-    this.slotImgs = [];
-    const slotKeys = ['warrior', 'archer', 'mage'];
-    for (let i = 0; i < 9; i++) {
-      const col = i % 3, row = Math.floor(i / 3);
-      const cx = 30 + col * 48, cy = 530 + row * 48;
-      this.add.rectangle(cx, cy, 44, 44, 0x14101c).setOrigin(0, 0);
-      const img = this.add.image(cx + 22, cy + 22, slotKeys[Math.floor(Math.random() * 3)] + '_w1').setScale(1.2).setDepth(1);
-      img._slotCls = slotKeys[Math.floor(Math.random() * 3)];
-      this.slotImgs.push(img);
+    this.add.text(30, 512, '掷骰 · 3金', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' });
+    this.dice = [];
+    const diceKeys = ['warrior', 'archer', 'mage'];
+    for (let i = 0; i < 3; i++) {
+      const cx = 58 + i * 60, cy = 578;
+      const k = diceKeys[Math.floor(Math.random() * 3)];
+      const die = this.add.container(cx, cy).setDepth(1);
+      const face = this.add.rectangle(0, 0, 52, 52, 0xf2ead8).setStrokeStyle(2, 0x14101c);
+      const img = this.add.image(0, 0, k + '_w1').setScale(1.1);
+      const pip1 = this.add.circle(-20, -20, 3, 0x14101c);
+      const pip2 = this.add.circle(20, 20, 3, 0x14101c);
+      die.add([face, img, pip1, pip2]);
+      die._img = img;
+      die._cls = k;
+      this.dice.push(die);
     }
-    this.mkBtn(196, 548, 96, 44, '拉杆 3金', () => this.spinSlot());
-    this.ui.spinTxt = this.add.text(196, 606, '', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
+    this.mkBtn(212, 552, 80, 44, '掷骰 3金', () => this.rollDice(), 14);
+    this.ui.diceTxt = this.add.text(30, 636, '', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
     // ---- 开包 ----
     this.mkBtn(320, 520, 120, 64, '开包 5金', () => this.openPack(), 18);
     this.ui.packPityTxt = this.add.text(320, 600, '保底 0/30', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
@@ -807,7 +812,7 @@ Object.assign(GameScene.prototype, {
       towerHp: 100, baseGold: 5, interestCap: 5, rerolls: 0,
       speedMul: 1, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
       field: [], bench: [null, null, null, null, null], shop: [], enemies: [],
-      hitStopUntil: 0, dragUnit: null, spinBusy: false
+      hitStopUntil: 0, dragUnit: null, diceBusy: false
     });
     this.ui.speedTxt.setText('1x');
     this.ui.endBox.setVisible(false);
@@ -837,7 +842,7 @@ Object.assign(GameScene.prototype, {
 });
 
 /* ============================================================
-   交互：拖拽布阵 / 吞噬 / 商店 / 转盘 / 开包 / 海克斯
+   交互：拖拽布阵 / 吞噬 / 商店 / 掷骰 / 开包 / 海克斯
    ============================================================ */
 function hexColor(s) { return parseInt(s.slice(1), 16); }
 
@@ -1090,35 +1095,49 @@ Object.assign(GameScene.prototype, {
     }
   },
 
-  /* ---------- 转盘（3x3 老虎机） ---------- */
-  spinSlot() {
-    if (G.phase !== 'prep' || G.spinBusy) return;
-    if (G.gold < 3) { this.ui.spinTxt.setText('金币不足'); return; }
-    G.gold -= 3; G.spinBusy = true; SFX.pack();
+  /* ---------- 掷骰召唤（三颗骰子） ---------- */
+  rollDice() {
+    if (G.phase !== 'prep' || G.diceBusy) return;
+    if (G.gold < 3) { this.ui.diceTxt.setText('金币不足'); return; }
+    G.gold -= 3; G.diceBusy = true; SFX.pack();
     this.updateTop();
     const keys = ['warrior', 'archer', 'mage'];
     let ticks = 0;
     this.time.addEvent({
       delay: 90, repeat: 5, callback: () => {
         ticks++;
-        for (const img of this.slotImgs) { const k = keys[Math.floor(Math.random() * 3)]; img._slotCls = k; img.setTexture(k + '_w1'); }
-        if (ticks >= 6) this.resolveSlot();
+        SFX.click();
+        for (const die of this.dice) {
+          const k = keys[Math.floor(Math.random() * 3)];
+          die._cls = k; die._img.setTexture(k + '_w1');
+          die.setAngle(Math.random() * 24 - 12);
+          die.y = 578 + (Math.random() * 8 - 4);
+        }
+        if (ticks >= 6) this.resolveDice();
       }
     });
   },
-  resolveSlot() {
-    G.spinBusy = false;
-    const cls = this.slotImgs.map(i => i._slotCls);
-    const lines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
-    const hits = lines.filter(([a, b, c]) => cls[a] === cls[b] && cls[b] === cls[c]);
-    if (hits.length === 0) { this.ui.spinTxt.setText('没中，再来！'); return; }
+  resolveDice() {
+    G.diceBusy = false;
+    for (const die of this.dice) { die.setAngle(0); die.y = 578; }
+    const cls = this.dice.map(d => d._cls);
     const got = [];
-    for (const [a] of hits) {
-      const u = makeUnit(cls[a], 'N', 'player');
-      if (this.addToBench(u) !== -1) got.push(CLASSES[cls[a]].name);
+    const summon = (c, rarity) => {
+      const u = makeUnit(c, rarity, 'player');
+      if (this.addToBench(u) !== -1) got.push(CLASSES[c].name);
+    };
+    if (cls[0] === cls[1] && cls[1] === cls[2]) {
+      summon(cls[0], 'R'); summon(cls[0], 'N');
+      if (got.length) { SFX.win(); SFX.hexGold(); this.ui.diceTxt.setText('三同！' + got[0] + '×2 入队'); }
+      else this.ui.diceTxt.setText('三同！但备战席满了');
+    } else if (cls[0] === cls[1] || cls[1] === cls[2] || cls[0] === cls[2]) {
+      const pair = cls[0] === cls[1] ? cls[0] : cls[2];
+      summon(pair, 'N');
+      if (got.length) { SFX.win(); this.ui.diceTxt.setText('对子！' + got[0] + ' 入队'); }
+      else this.ui.diceTxt.setText('对子！但备战席满了');
+    } else {
+      this.ui.diceTxt.setText('没中，再来！');
     }
-    if (got.length) { SFX.win(); this.ui.spinTxt.setText('中了！' + got.join('、') + ' 入队'); }
-    else this.ui.spinTxt.setText('中了但备战席满了');
     this.updateTop();
   },
 
