@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>噬运军团 · M0 原型</title>
+<title>噬运军团 · v0.2</title>
 <link rel="icon" href="data:,">
 <style>
   html, body { margin: 0; padding: 0; background: #0b0910; height: 100%; overflow: hidden; }
@@ -20,10 +20,10 @@
 <script>
 'use strict';
 /* ============================================================
-   噬运军团 · M0 可玩原型
+   噬运军团 · v0.2（M1：可发行外观）
    Phaser 4.2.1（jsdelivr CDN，唯一外部资源）
-   所有美术：代码在 canvas 上逐像素画的精灵（32x32，Boss 48x48）
-   音效：WebAudio 合成，无外部音频
+   所有美术：代码在 canvas 上逐像素画的精灵（48x48，Boss 64x64，12 帧/角色）
+   音效：WebAudio 合成 SFX + 循环 BGM，无外部音频
    ============================================================ */
 if (!window.Phaser) { document.getElementById('fallback').style.display = 'block'; }
 
@@ -114,15 +114,102 @@ const SFX = {
   lose()   { [392, 330, 262, 196].forEach((f, i) => this.tone(f, 0.22, 'sawtooth', 0.09, 0, i * 0.11)); }
 };
 
+/* ---------------- 存档与设置（localStorage） ----------------
+   设置 + 最高波次 + 引导标志 + 对局快照（「继续」用，胜负后清除） */
+const LS_SETTINGS = 'syjt_settings_v1';
+const LS_BEST = 'syjt_best_v1';
+const LS_TUT = 'syjt_tut_v1';
+const LS_SAVE = 'syjt_save_v1';
+const DEFAULT_SETTINGS = { sfx: true, music: true, shake: true, speed: 1 };
+let SETTINGS = DEFAULT_SETTINGS;
+try {
+  const raw = localStorage.getItem(LS_SETTINGS);
+  if (raw) SETTINGS = Object.assign({}, DEFAULT_SETTINGS, JSON.parse(raw));
+} catch (e) { /* 损坏的设置就用默认 */ }
+function saveSettings() { try { localStorage.setItem(LS_SETTINGS, JSON.stringify(SETTINGS)); } catch (e) {} }
+function loadBest() { try { return parseInt(localStorage.getItem(LS_BEST) || '0', 10) || 0; } catch (e) { return 0; } }
+function saveBest(w) { try { if (w > loadBest()) localStorage.setItem(LS_BEST, String(w)); } catch (e) {} }
+function tutDone() { try { return localStorage.getItem(LS_TUT) === '1'; } catch (e) { return false; } }
+function markTutDone() { try { localStorage.setItem(LS_TUT, '1'); } catch (e) {} }
+function loadSave() { try { const raw = localStorage.getItem(LS_SAVE); return raw ? JSON.parse(raw) : null; } catch (e) { return null; } }
+function clearSave() { try { localStorage.removeItem(LS_SAVE); } catch (e) {} }
+let CONTINUE_RUN = false; // 主菜单「继续」时置 true，GameScene.create 读档
+
+/* ---------------- BGM：WebAudio 合成循环（无外部音频） ----------------
+   游戏跑 60 FPS；BGM 用前瞻调度，每 200ms 排 0.4s 的音符 */
+const BGM = {
+  enabled: true, mode: 'normal', paused: false, timer: null, step: 0, nextTime: 0,
+  CHORDS: [ // Am F C G，每小节 8 个八分音符
+    { root: 110.00, arp: [220.00, 261.63, 329.63] },
+    { root: 87.31, arp: [174.61, 220.00, 261.63] },
+    { root: 130.81, arp: [261.63, 329.63, 392.00] },
+    { root: 98.00, arp: [196.00, 246.94, 293.66] }
+  ],
+  start() {
+    if (this.timer) return;
+    this.nextTime = 0; this.step = 0;
+    this.timer = setInterval(() => this.schedule(), 200);
+  },
+  stop() { if (this.timer) { clearInterval(this.timer); this.timer = null; } },
+  setMode(m) { this.mode = m; },
+  note(freq, t, dur, type, vol) {
+    const ac = SFX.ac(); if (!ac) return;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(ac.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+  schedule() {
+    if (!this.enabled || this.paused) return;
+    const ac = SFX.ac(); if (!ac || ac.state === 'suspended') return;
+    if (this.nextTime < ac.currentTime) this.nextTime = ac.currentTime + 0.05;
+    const boss = this.mode === 'boss';
+    const spb = boss ? 60 / 116 / 2 : 60 / 72 / 2; // 八分音符时值
+    while (this.nextTime < ac.currentTime + 0.4) {
+      const bar = Math.floor(this.step / 8) % 4;
+      const chord = this.CHORDS[bar];
+      const s = this.step % 8;
+      if (s === 0 || s === 4) this.note(chord.root, this.nextTime, spb * 1.8, 'sine', boss ? 0.075 : 0.055);
+      if (boss && (s === 2 || s === 6)) this.note(chord.root / 2, this.nextTime, spb * 1.5, 'sawtooth', 0.03);
+      this.note(chord.arp[s % 3], this.nextTime, spb * 0.9, 'triangle', boss ? 0.04 : 0.03);
+      this.nextTime += spb; this.step++;
+    }
+  }
+};
+
+/* ---------------- 固定种子随机（战场装饰每局同图） ---------------- */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /* ============================================================
    精灵图集 · 玩家三职业（每人独立手绘，32x32）
    帧：w0/w1/w2 走路三帧，atk 攻击，hit 受击，die 死亡
    ============================================================ */
-function buildChar(scene, key, drawFn, size) {
-  const frames = { w0: 'w0', w1: 'w1', w2: 'w2', atk: 'atk', hit: 'hit', die: 'die' };
-  for (const suf of Object.keys(frames)) {
-    const c = mkCanvas(size, size);
-    drawFn(c.getContext('2d'), frames[suf]);
+/* ============================================================
+   精灵图集 · 12 帧/角色（60 FPS 下走路 10 张/秒、攻击 12 张/秒轮换）
+   帧：idle0/idle1 待机，w0/w1/w2/w3 走路，atk0/atk1/atk2 攻击，hit 受击，die 死亡，win 胜利
+   画法：先在 32 格（Boss 48 格）逐像素画，再最近邻放大到 48x48（Boss 64x64）
+   ============================================================ */
+const FRAMES12 = ['idle0', 'idle1', 'w0', 'w1', 'w2', 'w3', 'atk0', 'atk1', 'atk2', 'hit', 'die', 'win'];
+function buildChar(scene, key, drawFn, baseSize, finalSize) {
+  for (const suf of FRAMES12) {
+    if (scene.textures.exists(key + '_' + suf)) continue;
+    const tmp = mkCanvas(baseSize, baseSize);
+    drawFn(tmp.getContext('2d'), suf);
+    const c = mkCanvas(finalSize, finalSize);
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    g.drawImage(tmp, 0, 0, finalSize, finalSize);
     scene.textures.addCanvas(key + '_' + suf, c);
   }
 }
@@ -138,12 +225,14 @@ function drawWarrior(ctx, f) {
     line(ctx, 18, 22, 28, 29, W); line(ctx, 19, 23, 29, 30, L);
     return;
   }
-  const lean = f === 'hit' ? -1 : 0; // 受击后仰
+  const lean = f === 'hit' ? -1 : f === 'atk2' ? 1 : 0; // 受击后仰 / 追击前倾
+  const blink = f === 'idle1'; // 待机第二帧：眨眼
   // 红缨
   rect(ctx, 14 + lean, 1, 4, 2, R); rect(ctx, 13 + lean, 3, 6, 1, R); rect(ctx, 12 + lean, 4, 8, 1, R);
   // 头盔 + 脸
   rect(ctx, 11 + lean, 5, 10, 3, H); rect(ctx, 10 + lean, 8, 12, 2, H);
-  rect(ctx, 12 + lean, 9, 8, 3, S); px(ctx, 14 + lean, 10, K); px(ctx, 17 + lean, 10, K);
+  rect(ctx, 12 + lean, 9, 8, 3, S);
+  if (!blink) { px(ctx, 14 + lean, 10, K); px(ctx, 17 + lean, 10, K); }
   // 肩甲（金边）
   rect(ctx, 7 + lean, 11, 6, 3, H); rect(ctx, 19 + lean, 11, 6, 3, H);
   rect(ctx, 7 + lean, 11, 6, 1, G); rect(ctx, 19 + lean, 11, 6, 1, G);
@@ -153,30 +242,54 @@ function drawWarrior(ctx, f) {
   // 盾（左手）
   const shY = f === 'hit' ? 10 : 12;
   rect(ctx, 3 + lean, shY, 6, 10, B); rect(ctx, 4 + lean, shY + 1, 4, 8, L); rect(ctx, 5 + lean, shY + 4, 2, 2, G);
-  // 腿（三帧走路 / 攻击弓步 / 受击并腿）
+  // 腿（走路四帧 / 攻击三段 / 胜利站姿）
   if (f === 'w0') {
     rect(ctx, 11, 22, 4, 6, H); rect(ctx, 10, 28, 5, 2, K);
     rect(ctx, 17, 22, 4, 5, H); rect(ctx, 17, 27, 5, 2, K);
   } else if (f === 'w2') {
     rect(ctx, 11, 22, 4, 5, H); rect(ctx, 11, 27, 5, 2, K);
     rect(ctx, 17, 22, 4, 6, H); rect(ctx, 17, 28, 5, 2, K);
-  } else if (f === 'atk') { // 弓步
+  } else if (f === 'w3') { // 交错步：双腿并拢过中线
+    rect(ctx, 12, 22, 4, 6, H); rect(ctx, 11, 28, 5, 2, K);
+    rect(ctx, 16, 22, 4, 6, H); rect(ctx, 16, 28, 5, 2, K);
+  } else if (f === 'atk0') { // 蓄力下蹲
+    rect(ctx, 10, 22, 4, 6, H); rect(ctx, 9, 28, 5, 2, K);
+    rect(ctx, 18, 22, 4, 6, H); rect(ctx, 18, 28, 5, 2, K);
+  } else if (f === 'atk1') { // 弓步劈砍
     rect(ctx, 9, 22, 4, 7, H); rect(ctx, 8, 29, 5, 2, K);
     rect(ctx, 18, 22, 4, 6, H); rect(ctx, 18, 28, 5, 2, K);
+  } else if (f === 'atk2') { // 追击前踏
+    rect(ctx, 8, 22, 4, 7, H); rect(ctx, 7, 29, 5, 2, K);
+    rect(ctx, 19, 22, 4, 5, H); rect(ctx, 19, 27, 5, 2, K);
+  } else if (f === 'win') { // 胜利叉开站
+    rect(ctx, 9, 22, 4, 7, H); rect(ctx, 8, 29, 5, 2, K);
+    rect(ctx, 19, 22, 4, 7, H); rect(ctx, 19, 29, 5, 2, K);
   } else {
     rect(ctx, 11, 22, 4, 7, H); rect(ctx, 10, 29, 5, 2, K);
     rect(ctx, 17, 22, 4, 7, H); rect(ctx, 17, 29, 5, 2, K);
   }
   // 剑（右手）
-  if (f === 'atk') { // 高举斜劈
+  if (f === 'atk0') { // 蓄力：剑收回左肩
+    line(ctx, 20, 14, 10, 4, W); line(ctx, 21, 15, 11, 5, L);
+    rect(ctx, 19, 13, 4, 2, G);
+  } else if (f === 'atk1') { // 高举斜劈
     line(ctx, 23, 15, 30, 4, W); line(ctx, 24, 16, 31, 5, L);
     rect(ctx, 21, 14, 4, 2, G);
+  } else if (f === 'atk2') { // 追击：剑向前下方
+    line(ctx, 24, 14, 31, 26, W); line(ctx, 25, 15, 31, 27, L);
+    rect(ctx, 22, 13, 4, 2, G);
+  } else if (f === 'win') { // 胜利：剑举过头顶
+    rect(ctx, 24, 0, 3, 12, W); px(ctx, 25, 0, W);
+    rect(ctx, 23, 12, 5, 1, G); rect(ctx, 24, 13, 3, 2, T);
   } else {
     rect(ctx, 24, 6, 3, 11, W); px(ctx, 25, 5, W); px(ctx, 24, 5, L); px(ctx, 26, 5, L);
     rect(ctx, 23, 17, 5, 1, G); rect(ctx, 24, 18, 3, 2, T);
   }
   if (f === 'hit') { // 眩晕星
     px(ctx, 8, 6, PAL.Y); px(ctx, 24, 4, PAL.Y); px(ctx, 27, 8, PAL.Y);
+  }
+  if (f === 'win') { // 胜利金星
+    px(ctx, 8, 6, PAL.Y); px(ctx, 27, 4, PAL.Y); px(ctx, 5, 12, PAL.Y); px(ctx, 28, 10, PAL.Y);
   }
 }
 
@@ -189,12 +302,14 @@ function drawArcher(ctx, f) {
     line(ctx, 18, 22, 28, 30, T); line(ctx, 18, 22, 28, 30, W);
     return;
   }
-  const lean = f === 'hit' ? -1 : 0;
+  const lean = f === 'hit' ? -1 : f === 'atk2' ? 1 : 0;
   const hoodShift = f === 'hit' ? -2 : 0; // 受击兜帽歪向一边
+  const blink = f === 'idle1';
   // 尖顶兜帽
   rect(ctx, 13 + hoodShift, 2, 6, 2, E); rect(ctx, 12 + hoodShift, 4, 8, 2, E); rect(ctx, 11 + hoodShift, 6, 10, 3, E);
-  // 阴影脸 + 发光眼
-  rect(ctx, 13 + lean, 9, 6, 3, N); px(ctx, 14 + lean, 10, W); px(ctx, 17 + lean, 10, W);
+  // 阴影脸 + 发光眼（待机第二帧眨眼）
+  rect(ctx, 13 + lean, 9, 6, 3, N);
+  if (!blink) { px(ctx, 14 + lean, 10, W); px(ctx, 17 + lean, 10, W); }
   // 上衣 + 斜挎带 + 箭袋
   rect(ctx, 11 + lean, 12, 10, 7, E);
   line(ctx, 12 + lean, 13, 20 + lean, 18, T);
@@ -208,24 +323,48 @@ function drawArcher(ctx, f) {
   } else if (f === 'w2') {
     rect(ctx, 11, 22, 4, 5, T); rect(ctx, 11, 27, 5, 2, K);
     rect(ctx, 17, 22, 4, 6, T); rect(ctx, 17, 28, 5, 2, K);
-  } else if (f === 'atk') {
+  } else if (f === 'w3') { // 交错步
+    rect(ctx, 12, 22, 4, 6, T); rect(ctx, 11, 28, 5, 2, K);
+    rect(ctx, 16, 22, 4, 6, T); rect(ctx, 16, 28, 5, 2, K);
+  } else if (f === 'atk0') { // 蓄力：搭箭下蹲
+    rect(ctx, 10, 22, 4, 6, T); rect(ctx, 9, 28, 5, 2, K);
+    rect(ctx, 18, 22, 4, 6, T); rect(ctx, 18, 28, 5, 2, K);
+  } else if (f === 'atk1') { // 拉弓
     rect(ctx, 9, 22, 4, 7, T); rect(ctx, 8, 29, 5, 2, K);
     rect(ctx, 18, 22, 4, 6, T); rect(ctx, 18, 28, 5, 2, K);
+  } else if (f === 'atk2') { // 放弦前倾
+    rect(ctx, 8, 22, 4, 7, T); rect(ctx, 7, 29, 5, 2, K);
+    rect(ctx, 19, 22, 4, 5, T); rect(ctx, 19, 27, 5, 2, K);
+  } else if (f === 'win') {
+    rect(ctx, 9, 22, 4, 7, T); rect(ctx, 8, 29, 5, 2, K);
+    rect(ctx, 19, 22, 4, 7, T); rect(ctx, 19, 29, 5, 2, K);
   } else {
     rect(ctx, 11, 22, 4, 7, T); rect(ctx, 10, 29, 5, 2, K);
     rect(ctx, 17, 22, 4, 7, T); rect(ctx, 17, 29, 5, 2, K);
   }
   // 弓
-  if (f === 'atk') { // 横弓搭箭
+  if (f === 'atk0') { // 弓放低，箭搭在弦下
+    line(ctx, 5, 12, 4, 17, T); line(ctx, 4, 17, 5, 22, T);
+    line(ctx, 5, 12, 5, 22, W);
+    line(ctx, 6, 19, 20, 19, Y); px(ctx, 21, 19, L);
+  } else if (f === 'atk1') { // 横弓搭箭
     line(ctx, 8, 12, 4, 16, T); line(ctx, 4, 16, 8, 20, T);
     line(ctx, 8, 12, 8, 20, W);
     line(ctx, 8, 16, 20, 16, Y); px(ctx, 21, 16, L);
     px(ctx, 7, 15, W); px(ctx, 7, 17, W);
+  } else if (f === 'atk2') { // 放弦：弓向前甩下
+    line(ctx, 8, 14, 3, 22, T); line(ctx, 3, 22, 9, 25, T);
+    line(ctx, 8, 14, 9, 25, W);
+  } else if (f === 'win') { // 胜利：弓举过头顶
+    line(ctx, 14, 0, 12, 8, T); line(ctx, 12, 8, 14, 14, T);
+    line(ctx, 14, 0, 14, 14, W);
+    line(ctx, 15, 2, 15, 10, Y);
   } else { // 竖弓待命
     line(ctx, 5, 10, 4, 15, T); line(ctx, 4, 15, 5, 21, T);
     line(ctx, 5, 10, 5, 21, W);
   }
   if (f === 'hit') { px(ctx, 8, 6, Y); px(ctx, 24, 4, Y); px(ctx, 27, 8, Y); }
+  if (f === 'win') { px(ctx, 8, 6, Y); px(ctx, 27, 4, Y); px(ctx, 5, 12, Y); px(ctx, 28, 10, Y); }
 }
 
 /* ---------------- 术士：紫袍 + 尖帽 + 法杖 ---------------- */
@@ -238,25 +377,44 @@ function drawMage(ctx, f) {
     rect(ctx, 26, 27, 3, 3, G);
     return;
   }
-  const lean = f === 'hit' ? -1 : 0;
+  const lean = f === 'hit' ? -1 : f === 'atk2' ? 1 : 0;
   const hatShift = f === 'hit' ? -2 : 0; // 受击帽子歪了
   const sway = f === 'w0' ? -1 : f === 'w2' ? 1 : 0; // 走路袍摆
+  const blink = f === 'idle1';
   // 尖帽 + 金带
   rect(ctx, 14 + hatShift, 1, 4, 2, V); rect(ctx, 13 + hatShift, 3, 6, 2, V);
   rect(ctx, 12 + hatShift, 5, 8, 2, V); rect(ctx, 10 + hatShift, 7, 12, 2, V);
   rect(ctx, 12 + hatShift, 6, 8, 1, G);
-  // 脸 + 发光眼
-  rect(ctx, 13 + lean, 9, 6, 3, S); px(ctx, 14 + lean, 10, C); px(ctx, 17 + lean, 10, C);
+  // 脸 + 发光眼（待机第二帧眨眼）
+  rect(ctx, 13 + lean, 9, 6, 3, S);
+  if (!blink) { px(ctx, 14 + lean, 10, C); px(ctx, 17 + lean, 10, C); }
   // 法袍（无腿，袍摆摇曳）+ 金纹
-  rect(ctx, 11 + lean, 12, 10, 6, P); rect(ctx, 10 + lean, 18, 12, 6, V);
-  rect(ctx, 9 + lean + sway, 24, 14, 4, V);
-  rect(ctx, 15 + lean, 12, 2, 8, G);
+  if (f === 'w3') { // 交错步：袍摆收窄
+    rect(ctx, 11 + lean, 12, 10, 6, P); rect(ctx, 10 + lean, 18, 12, 5, V);
+    rect(ctx, 10 + lean, 23, 12, 3, V);
+    rect(ctx, 15 + lean, 12, 2, 8, G);
+  } else {
+    rect(ctx, 11 + lean, 12, 10, 6, P); rect(ctx, 10 + lean, 18, 12, 6, V);
+    rect(ctx, 9 + lean + sway, 24, 14, 4, V);
+    rect(ctx, 15 + lean, 12, 2, 8, G);
+  }
   // 法杖 + 法球
-  if (f === 'atk') { // 法杖高举，法球变大发光
+  if (f === 'atk0') { // 蓄力：法杖收回身侧，法球收小
+    line(ctx, 20, 8, 20, 27, T);
+    rect(ctx, 19, 4, 4, 4, G); px(ctx, 20, 5, W); px(ctx, 21, 5, W);
+  } else if (f === 'atk1') { // 法杖高举，法球变大发光
     line(ctx, 25, 0, 25, 22, T);
     rect(ctx, 22, 0, 6, 5, G); px(ctx, 24, 2, W); px(ctx, 25, 2, W); px(ctx, 24, 3, W); px(ctx, 25, 3, W);
     rect(ctx, 8 + lean, 24, 16, 4, V); // 袍摆张开
     px(ctx, 20, 2, Y); px(ctx, 28, 4, Y); px(ctx, 18, 8, Y);
+  } else if (f === 'atk2') { // 法杖前指，法球射出
+    line(ctx, 18, 16, 30, 10, T);
+    rect(ctx, 28, 6, 6, 5, G); px(ctx, 30, 8, W); px(ctx, 31, 8, W); px(ctx, 30, 9, W); px(ctx, 31, 9, W);
+    px(ctx, 26, 4, Y); px(ctx, 24, 12, Y);
+  } else if (f === 'win') { // 胜利：法杖高举过顶
+    line(ctx, 25, 0, 25, 20, T);
+    rect(ctx, 22, 0, 6, 5, G); px(ctx, 24, 2, W); px(ctx, 25, 2, W); px(ctx, 24, 3, W); px(ctx, 25, 3, W);
+    px(ctx, 20, 2, Y); px(ctx, 28, 4, Y); px(ctx, 18, 8, Y); px(ctx, 8, 6, Y);
   } else {
     line(ctx, 24, 6, 24, 27, T);
     rect(ctx, 23, 2, 4, 4, G); px(ctx, 24, 3, W); px(ctx, 25, 3, W); px(ctx, 24, 4, W);
@@ -282,12 +440,43 @@ function drawSlime(ctx, f) {
     px(ctx, 10, 22, Y); px(ctx, 21, 22, Y);
     return;
   }
-  if (f === 'atk') { // 前扑，张大嘴
+  if (f === 'idle1') { // 眨眼：闭眼线
+    rect(ctx, 9, 16, 14, 3, E); rect(ctx, 7, 19, 18, 6, E); rect(ctx, 8, 25, 16, 5, E);
+    rect(ctx, 12, 22, 8, 5, Y);
+    rect(ctx, 11, 20, 3, 1, K); rect(ctx, 17, 20, 3, 1, K);
+    rect(ctx, 14, 24, 4, 1, K);
+    return;
+  }
+  if (f === 'atk0') { // 蓄力：缩成一团，嘴闭上
+    rect(ctx, 8, 20, 16, 3, E); rect(ctx, 6, 23, 20, 5, E); rect(ctx, 8, 28, 16, 2, E);
+    rect(ctx, 11, 21, 3, 3, W); px(ctx, 12, 22, K);
+    rect(ctx, 17, 21, 3, 3, W); px(ctx, 18, 22, K);
+    rect(ctx, 13, 25, 6, 1, K);
+    return;
+  }
+  if (f === 'atk1' || f === 'atk') { // 前扑，张大嘴
     rect(ctx, 9, 16, 16, 3, E); rect(ctx, 7, 19, 20, 6, E); rect(ctx, 8, 25, 16, 5, E);
     rect(ctx, 12, 22, 8, 5, Y);
     rect(ctx, 11, 18, 3, 3, W); px(ctx, 12, 19, K);
     rect(ctx, 17, 18, 3, 3, W); px(ctx, 18, 19, K);
     rect(ctx, 22, 22, 4, 3, K);
+    return;
+  }
+  if (f === 'atk2') { // 落地拉长，嘴张大
+    rect(ctx, 10, 12, 12, 4, E); rect(ctx, 8, 16, 16, 8, E); rect(ctx, 9, 24, 14, 5, E);
+    rect(ctx, 12, 19, 8, 6, Y);
+    rect(ctx, 11, 15, 3, 3, W); px(ctx, 12, 16, K);
+    rect(ctx, 17, 15, 3, 3, W); px(ctx, 18, 16, K);
+    rect(ctx, 14, 21, 4, 1, K);
+    return;
+  }
+  if (f === 'win') { // 胜利：拉高 + 笑脸 + 金星
+    rect(ctx, 10, 10, 12, 4, E); rect(ctx, 8, 14, 16, 9, E); rect(ctx, 9, 23, 14, 5, E);
+    rect(ctx, 12, 20, 8, 3, Y);
+    rect(ctx, 11, 16, 3, 3, W); px(ctx, 12, 17, K);
+    rect(ctx, 17, 16, 3, 3, W); px(ctx, 18, 17, K);
+    px(ctx, 13, 22, K); px(ctx, 18, 22, K);
+    px(ctx, 6, 8, Y); px(ctx, 25, 6, Y);
     return;
   }
   if (f === 'w0') { // 压扁
@@ -302,7 +491,13 @@ function drawSlime(ctx, f) {
     rect(ctx, 11, 15, 3, 3, W); px(ctx, 12, 16, K);
     rect(ctx, 17, 15, 3, 3, W); px(ctx, 18, 16, K);
     rect(ctx, 14, 22, 4, 1, K);
-  } else { // 正常
+  } else if (f === 'w3') { // 跳起：整体抬高 2px
+    rect(ctx, 9, 14, 14, 3, E); rect(ctx, 7, 17, 18, 6, E); rect(ctx, 8, 23, 16, 5, E);
+    rect(ctx, 12, 20, 8, 5, Y);
+    rect(ctx, 11, 16, 3, 3, W); px(ctx, 12, 17, K);
+    rect(ctx, 17, 16, 3, 3, W); px(ctx, 18, 17, K);
+    rect(ctx, 14, 22, 4, 1, K);
+  } else { // 正常（idle0 / w1）
     rect(ctx, 9, 16, 14, 3, E); rect(ctx, 7, 19, 18, 6, E); rect(ctx, 8, 25, 16, 5, E);
     rect(ctx, 12, 22, 8, 5, Y);
     rect(ctx, 11, 18, 3, 3, W); px(ctx, 12, 19, K);
@@ -327,19 +522,24 @@ function drawBat(ctx, f) {
     px(ctx, 12, 10, Y); px(ctx, 19, 9, Y); px(ctx, 15, 7, Y);
     return;
   }
-  // 翅膀三帧扇动
+  // 翅膀扇动（四帧走路 + 攻击三段 + 胜利）
   if (f === 'w0') { tri(ctx, 13, 14, 3, 4, 6, 14, D); tri(ctx, 18, 14, 28, 4, 25, 14, D); }
   else if (f === 'w2') { tri(ctx, 13, 16, 3, 24, 6, 17, D); tri(ctx, 18, 16, 28, 24, 25, 17, D); }
-  else if (f === 'atk') { tri(ctx, 13, 15, 6, 8, 8, 18, D); tri(ctx, 18, 15, 25, 8, 23, 18, D); }
+  else if (f === 'w3') { tri(ctx, 13, 16, 4, 20, 7, 18, D); tri(ctx, 18, 16, 27, 20, 24, 18, D); }
+  else if (f === 'atk0') { tri(ctx, 13, 16, 6, 18, 8, 20, D); tri(ctx, 18, 16, 25, 18, 23, 20, D); }
+  else if (f === 'atk1') { tri(ctx, 13, 15, 6, 8, 8, 18, D); tri(ctx, 18, 15, 25, 8, 23, 18, D); }
+  else if (f === 'atk2') { tri(ctx, 13, 16, 3, 26, 7, 18, D); tri(ctx, 18, 16, 28, 26, 24, 18, D); }
+  else if (f === 'win') { tri(ctx, 13, 14, 3, 2, 6, 14, D); tri(ctx, 18, 14, 28, 2, 25, 14, D); }
   else { tri(ctx, 13, 15, 2, 13, 6, 17, D); tri(ctx, 18, 15, 29, 13, 25, 17, D); }
   // 身体
   rect(ctx, 13, 14, 6, 6, V);
   px(ctx, 13, 12, V); px(ctx, 18, 12, V);
-  px(ctx, 14, 16, R); px(ctx, 17, 16, R);
-  if (f === 'atk') { rect(ctx, 14, 19, 4, 2, W); } else { px(ctx, 15, 19, W); px(ctx, 16, 19, W); }
+  if (f !== 'idle1') { px(ctx, 14, 16, R); px(ctx, 17, 16, R); } // 待机第二帧眨眼
+  if (f === 'atk1' || f === 'atk2' || f === 'win') { rect(ctx, 14, 19, 4, 2, W); } else { px(ctx, 15, 19, W); px(ctx, 16, 19, W); }
+  if (f === 'win') { px(ctx, 8, 6, Y); px(ctx, 24, 4, Y); px(ctx, 27, 10, Y); }
 }
 
-/* ---------------- Boss：骷髅王（48x48 独立大图集） ---------------- */
+/* ---------------- Boss：骷髅王（48 格原画 → 64x64） ---------------- */
 function drawBoss(ctx, f) {
   const { G, R, W, K, L, H, D } = PAL;
   if (f === 'die') { // 骨头堆：头骨 + 肋骨 + 剑 + 王冠散落
@@ -349,9 +549,10 @@ function drawBoss(ctx, f) {
     rect(ctx, 32, 40, 8, 3, G);
     return;
   }
-  const lean = f === 'hit' ? -1 : f === 'atk' ? 1 : 0;
+  const lean = f === 'hit' ? -1 : f === 'atk2' ? 1 : 0;
   const capeSway = f === 'w0' ? -1 : f === 'w2' ? 1 : 0;
   const crownShift = f === 'hit' ? -2 : 0;
+  const blink = f === 'idle1';
   // 披风（暗红，拖地）
   rect(ctx, 11 + capeSway, 10, 5, 32, D); rect(ctx, 32 + capeSway, 10, 5, 32, D);
   // 王冠
@@ -361,7 +562,7 @@ function drawBoss(ctx, f) {
   // 头骨 + 下颌 + 眼窝（红光）+ 牙齿
   rect(ctx, 16 + lean, 6, 16, 10, W); rect(ctx, 19 + lean, 16, 10, 4, W);
   rect(ctx, 19 + lean, 9, 4, 4, K); rect(ctx, 25 + lean, 9, 4, 4, K);
-  px(ctx, 20 + lean, 10, R); px(ctx, 26 + lean, 10, R);
+  if (!blink) { px(ctx, 20 + lean, 10, R); px(ctx, 26 + lean, 10, R); } // 待机第二帧：眼窝熄灭
   px(ctx, 23 + lean, 13, K);
   rect(ctx, 20 + lean, 17, 1, 2, K); rect(ctx, 22 + lean, 17, 1, 2, K); rect(ctx, 24 + lean, 17, 1, 2, K); rect(ctx, 26 + lean, 17, 1, 2, K);
   // 肋骨 + 脊柱
@@ -372,36 +573,68 @@ function drawBoss(ctx, f) {
   rect(ctx, 12 + lean, 20, 4, 8, W); px(ctx, 12 + lean, 28, W); px(ctx, 14 + lean, 28, W);
   // 右臂握剑
   rect(ctx, 32 + lean, 20, 4, 6, W);
-  if (f === 'atk') { // 大剑高举过顶
+  if (f === 'atk0') { // 蓄力：大剑垂向身后
+    line(ctx, 36, 24, 42, 38, W); line(ctx, 37, 25, 43, 39, L);
+    rect(ctx, 34, 22, 6, 2, G);
+  } else if (f === 'atk1') { // 大剑高举过顶
     line(ctx, 38, 0, 30, 18, W); line(ctx, 39, 1, 31, 19, L);
     rect(ctx, 30, 18, 5, 2, G);
+  } else if (f === 'atk2') { // 横扫：大剑向前横挥
+    line(ctx, 36, 20, 47, 24, W); line(ctx, 37, 21, 47, 25, L);
+    rect(ctx, 33, 19, 5, 2, G);
+  } else if (f === 'win') { // 胜利：大剑竖举
+    rect(ctx, 35, 0, 4, 18, W); px(ctx, 36, 0, W); px(ctx, 37, 0, W);
+    rect(ctx, 33, 18, 7, 2, G);
   } else { // 大剑斜持
     line(ctx, 36, 4, 42, 26, W); line(ctx, 37, 5, 43, 27, L);
     rect(ctx, 34, 25, 6, 1, G); rect(ctx, 35, 26, 4, 2, G);
   }
-  // 腿骨（三帧 stomping）
+  // 腿骨（四帧 stomping）
   if (f === 'w0') {
     rect(ctx, 17, 30, 4, 10, W); rect(ctx, 16, 40, 6, 3, K);
     rect(ctx, 26, 30, 4, 8, W); rect(ctx, 26, 38, 6, 3, K);
   } else if (f === 'w2') {
     rect(ctx, 18, 30, 4, 8, W); rect(ctx, 18, 38, 6, 3, K);
     rect(ctx, 25, 30, 4, 10, W); rect(ctx, 24, 40, 6, 3, K);
+  } else if (f === 'w3') { // 交错步
+    rect(ctx, 19, 30, 4, 9, W); rect(ctx, 18, 39, 6, 3, K);
+    rect(ctx, 25, 30, 4, 9, W); rect(ctx, 25, 39, 6, 3, K);
+  } else if (f === 'atk0') { // 蓄力下蹲
+    rect(ctx, 18, 30, 4, 9, W); rect(ctx, 17, 39, 6, 3, K);
+    rect(ctx, 26, 30, 4, 9, W); rect(ctx, 25, 39, 6, 3, K);
+  } else if (f === 'win') { // 胜利叉开站
+    rect(ctx, 16, 30, 4, 10, W); rect(ctx, 15, 40, 6, 3, K);
+    rect(ctx, 28, 30, 4, 10, W); rect(ctx, 27, 40, 6, 3, K);
   } else {
     rect(ctx, 18, 30, 4, 10, W); rect(ctx, 17, 40, 6, 3, K);
     rect(ctx, 26, 30, 4, 10, W); rect(ctx, 25, 40, 6, 3, K);
   }
   if (f === 'hit') { px(ctx, 10, 14, W); px(ctx, 38, 12, W); px(ctx, 34, 20, W); }
-  if (f === 'atk') { rect(ctx, 19 + lean, 9, 4, 4, R); rect(ctx, 25 + lean, 9, 4, 4, R); } // 攻击时眼窝燃红
+  if (f === 'atk1' || f === 'atk2') { rect(ctx, 19 + lean, 9, 4, 4, R); rect(ctx, 25 + lean, 9, 4, 4, R); } // 攻击时眼窝燃红
+  if (f === 'win') { px(ctx, 8, 8, PAL.Y); px(ctx, 40, 6, PAL.Y); px(ctx, 6, 24, PAL.Y); px(ctx, 42, 30, PAL.Y); }
 }
 
-/* ---------------- 塔（48x48）+ 弹道/火花贴图 ---------------- */
+/* ---------------- 塔（64x64 重画：水晶 + 石基 + 侧晶） ---------------- */
 function drawTower(ctx) {
-  const { H, L, K, C, W } = PAL;
-  rect(ctx, 12, 24, 24, 20, H); rect(ctx, 12, 24, 24, 2, L);
-  rect(ctx, 12, 30, 24, 1, K); rect(ctx, 12, 36, 24, 1, K);
-  rect(ctx, 21, 34, 6, 10, K);
-  tri(ctx, 24, 4, 14, 22, 34, 22, C); tri(ctx, 24, 8, 18, 20, 30, 20, W);
-  px(ctx, 20, 6, W); px(ctx, 28, 10, W); px(ctx, 16, 16, W);
+  const { H, L, K, C, W, G } = PAL;
+  // 底座台阶
+  rect(ctx, 12, 52, 40, 6, H); rect(ctx, 8, 58, 48, 6, L);
+  rect(ctx, 12, 52, 40, 1, L); rect(ctx, 8, 58, 48, 1, H);
+  // 石基柱身 + 砖缝 + 门
+  rect(ctx, 16, 36, 32, 16, H);
+  rect(ctx, 24, 36, 1, 16, K); rect(ctx, 32, 36, 1, 16, K); rect(ctx, 40, 36, 1, 16, K);
+  rect(ctx, 16, 44, 32, 1, K);
+  rect(ctx, 28, 44, 8, 8, K); px(ctx, 30, 43, K); px(ctx, 33, 43, K);
+  rect(ctx, 30, 46, 4, 6, 0x8b3fd9);
+  // 侧边小水晶
+  tri(ctx, 14, 30, 10, 38, 18, 38, C); tri(ctx, 14, 32, 12, 38, 16, 38, W);
+  tri(ctx, 50, 30, 46, 38, 54, 38, C); tri(ctx, 50, 32, 48, 38, 52, 38, W);
+  // 主水晶：上 C 下 W，中间金腰
+  tri(ctx, 32, 4, 18, 28, 46, 28, C);
+  tri(ctx, 32, 40, 18, 28, 46, 28, W);
+  tri(ctx, 32, 36, 24, 28, 40, 28, C);
+  rect(ctx, 18, 27, 28, 2, G);
+  px(ctx, 26, 12, W); px(ctx, 38, 16, W); px(ctx, 24, 24, W); px(ctx, 30, 32, C);
 }
 function drawArrowTex(ctx) { // 16x8 箭矢
   line(ctx, 2, 4, 11, 4, PAL.T);
@@ -419,16 +652,24 @@ function drawSparkTex(ctx) { // 12x12 四角星火花
 }
 
 function buildAllTextures(scene) {
-  buildChar(scene, 'warrior', drawWarrior, 32);
-  buildChar(scene, 'archer', drawArcher, 32);
-  buildChar(scene, 'mage', drawMage, 32);
-  buildChar(scene, 'slime', drawSlime, 32);
-  buildChar(scene, 'bat', drawBat, 32);
-  buildChar(scene, 'boss', drawBoss, 48);
-  const tw = mkCanvas(48, 48); drawTower(tw.getContext('2d')); scene.textures.addCanvas('tower', tw);
-  const ar = mkCanvas(16, 8); drawArrowTex(ar.getContext('2d')); scene.textures.addCanvas('arrow', ar);
-  const ob = mkCanvas(16, 16); drawOrbTex(ob.getContext('2d')); scene.textures.addCanvas('orb', ob);
-  const sp = mkCanvas(12, 12); drawSparkTex(sp.getContext('2d')); scene.textures.addCanvas('spark', sp);
+  buildChar(scene, 'warrior', drawWarrior, 32, 48);
+  buildChar(scene, 'archer', drawArcher, 32, 48);
+  buildChar(scene, 'mage', drawMage, 32, 48);
+  buildChar(scene, 'slime', drawSlime, 32, 48);
+  buildChar(scene, 'bat', drawBat, 32, 48);
+  buildChar(scene, 'boss', drawBoss, 48, 64);
+  if (!scene.textures.exists('tower')) {
+    const tw = mkCanvas(64, 64); drawTower(tw.getContext('2d')); scene.textures.addCanvas('tower', tw);
+  }
+  if (!scene.textures.exists('arrow')) {
+    const ar = mkCanvas(16, 8); drawArrowTex(ar.getContext('2d')); scene.textures.addCanvas('arrow', ar);
+  }
+  if (!scene.textures.exists('orb')) {
+    const ob = mkCanvas(16, 16); drawOrbTex(ob.getContext('2d')); scene.textures.addCanvas('orb', ob);
+  }
+  if (!scene.textures.exists('spark')) {
+    const sp = mkCanvas(12, 12); drawSparkTex(sp.getContext('2d')); scene.textures.addCanvas('spark', sp);
+  }
 }
 
 /* ============================================================
@@ -454,7 +695,7 @@ const DEVOUR_DECAY = [1, 0.7, 0.4, 0.2, 0.1]; // 第 n 次吞噬收益系数（�
 const ENEMY = {
   slime: { name: '史莱姆',     hp: 30,  atk: 6,  range: 42, aspd: 0.7, speed: 44, crit: 0.05, tex: 'slime', scale: 2,   elite: false },
   bat:   { name: '疾行蝙蝠',   hp: 18,  atk: 5,  range: 42, aspd: 1.0, speed: 78, crit: 0.05, tex: 'bat',   scale: 2,   elite: false },
-  boss:  { name: '骷髅王',     hp: 420, atk: 16, range: 76, aspd: 0.6, speed: 30, crit: 0.10, tex: 'boss',  scale: 2.4, elite: true }
+  boss:  { name: '骷髅王',     hp: 420, atk: 16, range: 76, aspd: 0.6, speed: 30, crit: 0.10, tex: 'boss',  scale: 1.8, elite: true }
 };
 const WAVES = [
   { list: [['slime', 3]] },
@@ -509,14 +750,14 @@ function makeEnemy(kind, wave) {
     e.maxHp = Math.round(ENEMY.boss.hp * hpMul); e.hp = e.maxHp;
     e.atk = Math.round(ENEMY.boss.atk * atkMul * 10) / 10;
     e.range = ENEMY.boss.range; e.aspd = ENEMY.boss.aspd; e.speed = ENEMY.boss.speed; e.crit = ENEMY.boss.crit;
-    e.baseScale = 2.4; e.isBoss = true;
+    e.baseScale = 1.8; e.isBoss = true;
   } else if (kind === 'elite') {
     e = makeUnit('warrior', 'N', 'enemy');
     Object.assign(e, { cls: 'slime', name: '精英史莱姆', tex: 'slime' });
     e.maxHp = Math.round(ENEMY.slime.hp * hpMul * 2); e.hp = e.maxHp;
     e.atk = Math.round(ENEMY.slime.atk * atkMul * 1.5 * 10) / 10;
     e.range = ENEMY.slime.range; e.aspd = ENEMY.slime.aspd; e.speed = ENEMY.slime.speed; e.crit = 0.05;
-    e.baseScale = 2.6; e.isElite = true;
+    e.baseScale = 1.75; e.isElite = true;
   } else {
     const def = ENEMY[kind];
     e = makeUnit('warrior', 'N', 'enemy');
@@ -555,6 +796,86 @@ function cellAt(x, y) {
   return { c, r };
 }
 
+/* ---------------- 存档快照（继续 = 恢复本局，非继承金币） ---------------- */
+function snapUnit(u) {
+  return { cls: u.cls, rarity: u.rarity, star: u.star, starProg: u.starProg, level: u.level, xp: u.xp, devourCount: u.devourCount, cell: u.cell };
+}
+function restoreUnit(s) {
+  const u = makeUnit(s.cls, s.rarity, 'player');
+  u.star = s.star; u.starProg = s.starProg || 0; u.level = s.level; u.xp = s.xp || 0; u.devourCount = s.devourCount || 0;
+  recompute(u);
+  return u;
+}
+
+/* ---------------- 菜单共用组件（主菜单 / 暂停 / 结算共用） ---------------- */
+function menuBtn(scene, x, y, w, h, label, cb, fontSize) {
+  const bg = scene.add.rectangle(x, y, w, h, 0x3a3348).setOrigin(0.5).setInteractive().setStrokeStyle(2, 0xc9a227);
+  const txt = scene.add.text(x, y, label, { fontSize: (fontSize || 18) + 'px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+  bg.on('pointerover', () => bg.setFillStyle(0x5b5470));
+  bg.on('pointerout', () => bg.setFillStyle(0x3a3348));
+  bg.on('pointerdown', () => { SFX.click(); cb(); });
+  return { bg, txt };
+}
+
+function createSettingsOverlay(scene, depth) {
+  const c = scene.add.container(0, 0).setDepth(depth || 60).setVisible(false);
+  c.add(scene.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0));
+  const panel = scene.add.rectangle(GW / 2, GH / 2, 520, 420, 0x241f30).setStrokeStyle(2, 0xc9a227);
+  const title = scene.add.text(GW / 2, 180, '设置', { fontSize: '30px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+  c.add([panel, title]);
+  const rows = [];
+  const defs = [
+    { key: 'sfx', label: '音效', fmt: v => (v ? '开' : '关'), apply: () => { SFX.enabled = SETTINGS.sfx; } },
+    { key: 'music', label: '音乐', fmt: v => (v ? '开' : '关'), apply: () => { BGM.enabled = SETTINGS.music; if (SETTINGS.music) BGM.start(); } },
+    { key: 'shake', label: '震屏', fmt: v => (v ? '开' : '关'), apply: () => {} },
+    { key: 'speed', label: '默认倍速', fmt: v => v + 'x', apply: () => {} }
+  ];
+  defs.forEach((d, i) => {
+    const y = 250 + i * 56;
+    const lab = scene.add.text(GW / 2 - 180, y, d.label, { fontSize: '18px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0, 0.5);
+    const val = scene.add.text(GW / 2 + 180, y, '', { fontSize: '18px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(1, 0.5);
+    const hit = scene.add.rectangle(GW / 2 + 130, y, 110, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    hit.on('pointerdown', () => {
+      if (d.key === 'speed') SETTINGS.speed = SETTINGS.speed === 1 ? 2 : 1;
+      else SETTINGS[d.key] = !SETTINGS[d.key];
+      saveSettings(); d.apply(); refresh();
+    });
+    c.add([lab, hit, val]);
+    rows.push({ d, val });
+  });
+  function refresh() { rows.forEach(r => r.val.setText(r.d.fmt(SETTINGS[r.d.key]))); }
+  const back = menuBtn(scene, GW / 2, 500, 160, 44, '返回', () => c.setVisible(false), 17);
+  c.add([back.bg, back.txt]);
+  c._refresh = refresh;
+  refresh();
+  return c;
+}
+
+function createHowToOverlay(scene, depth) {
+  const c = scene.add.container(0, 0).setDepth(depth || 60).setVisible(false);
+  c.add(scene.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0));
+  const panel = scene.add.rectangle(GW / 2, GH / 2, 680, 500, 0x241f30).setStrokeStyle(2, 0xc9a227);
+  const title = scene.add.text(GW / 2, 150, '玩法说明', { fontSize: '30px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+  c.add([panel, title]);
+  const steps = [
+    { tex: 'warrior_idle0', head: '1. 拖棋子上场', body: '把备战席的棋子拖到战场格子里' },
+    { tex: 'archer_idle0', head: '2. 点开始战斗', body: '布好阵就开打，战斗全自动' },
+    { tex: 'mage_idle0', head: '3. 海克斯三选一', body: '每打赢第 3 波，挑一个强化' },
+    { tex: 'slime_idle0', head: '4. 吞噬进化', body: '把棋子拖到场上同伴身上吞噬升星' },
+    { tex: 'boss_idle0', head: '5. 守住水晶塔', body: '塔破了就输了，撑过 5 波获胜' }
+  ];
+  steps.forEach((s, i) => {
+    const y = 210 + i * 72;
+    const icon = scene.add.image(GW / 2 - 280, y, s.tex).setScale(1.4);
+    const head = scene.add.text(GW / 2 - 240, y - 14, s.head, { fontSize: '18px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0, 0.5);
+    const body = scene.add.text(GW / 2 - 240, y + 12, s.body, { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace' }).setOrigin(0, 0.5);
+    c.add([icon, head, body]);
+  });
+  const back = menuBtn(scene, GW / 2, 600, 160, 44, '返回', () => c.setVisible(false), 17);
+  c.add([back.bg, back.txt]);
+  return c;
+}
+
 /* ---------------- 场景骨架（方法在后面以 prototype 挂接） ---------------- */
 class GameScene extends Phaser.Scene {
   constructor() { super('Game'); }
@@ -564,11 +885,12 @@ class GameScene extends Phaser.Scene {
     this.buildField();
     this.buildBottom();
     this.buildOverlays();
-    this.resetGame();
+    if (CONTINUE_RUN) { CONTINUE_RUN = false; this.loadSave(); }
+    else this.resetGame();
     this.input.on('dragstart', (p, o) => this.onDragStart(p, o));
     this.input.on('drag', (p, o, x, y) => this.onDrag(p, o, x, y));
     this.input.on('dragend', (p, o) => this.onDragEnd(p, o));
-    this.input.on('pointerdown', () => SFX.ac());
+    this.input.on('pointerdown', () => { SFX.ac(); if (SETTINGS.music) BGM.start(); });
     this.scale.on('resize', () => {});
   }
   update(time, delta) { this.tick(time, delta); }
@@ -579,7 +901,7 @@ class GameScene extends Phaser.Scene {
    ============================================================ */
 Object.assign(GameScene.prototype, {
   mkBtn(x, y, w, h, label, cb, fontSize) {
-    const bg = this.add.rectangle(x, y, w, h, 0x3a3348).setOrigin(0, 0).setInteractive();
+    const bg = this.add.rectangle(x, y, w, h, 0x3a3348).setOrigin(0, 0).setInteractive().setStrokeStyle(1, 0xc9a227);
     const txt = this.add.text(x + w / 2, y + h / 2, label, {
       fontSize: (fontSize || 15) + 'px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold'
     }).setOrigin(0.5);
@@ -591,11 +913,14 @@ Object.assign(GameScene.prototype, {
 
   buildTopBar() {
     this.add.rectangle(0, 0, GW, 56, 0x241f30).setOrigin(0, 0);
-    this.add.rectangle(0, 54, GW, 2, 0x3a3348).setOrigin(0, 0);
-    this.add.text(16, 28, '噬运军团 · M0', { fontSize: '20px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0, 0.5);
+    this.add.rectangle(0, 54, GW, 2, 0x8a6d1f).setOrigin(0, 0);
+    this.add.text(16, 28, '噬运军团', { fontSize: '20px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0, 0.5);
     this.ui = {};
-    this.ui.waveTxt = this.add.text(220, 28, '第 1 波 / 5', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0, 0.5);
-    this.add.rectangle(340, 22, 12, 12, 0xc9a227);
+    this.ui.waveTxt = this.add.text(220, 24, '第 1 波 / 5', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0, 0.5);
+    this.add.rectangle(220, 44, 120, 5, 0x14101c).setOrigin(0, 0);
+    this.ui.waveProg = this.add.rectangle(220, 44, 0, 5, 0xc9a227).setOrigin(0, 0);
+    this.add.circle(346, 28, 7, 0xc9a227);
+    this.add.circle(346, 28, 3, 0x8a6d1f);
     this.ui.goldTxt = this.add.text(358, 28, '金币 8', { fontSize: '16px', color: '#e3cf9e', fontFamily: 'monospace' }).setOrigin(0, 0.5);
     this.ui.popTxt = this.add.text(480, 28, '人口 0/4', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0, 0.5);
     this.add.text(600, 28, '塔', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0, 0.5);
@@ -606,26 +931,23 @@ Object.assign(GameScene.prototype, {
     this.add.rectangle(850, 20, 120, 16, 0x3a3348).setOrigin(0, 0);
     this.ui.xpFg = this.add.rectangle(850, 20, 0, 16, 0x6fb7d9).setOrigin(0, 0);
     this.ui.lvlTxt = this.add.text(980, 28, 'Lv1', { fontSize: '16px', color: '#6fb7d9', fontFamily: 'monospace' }).setOrigin(0, 0.5);
-    const sp = this.mkBtn(1020, 12, 64, 32, '1x', () => {
+    const sp = this.mkBtn(1008, 12, 56, 32, '1x', () => {
       G.speedMul = G.speedMul === 1 ? 2 : G.speedMul === 2 ? 4 : 1;
       this.ui.speedTxt.setText(G.speedMul + 'x');
     });
     this.ui.speedTxt = sp.txt;
-    const mu = this.mkBtn(1096, 12, 64, 32, '音效开', () => {
-      SFX.enabled = !SFX.enabled;
+    const mu = this.mkBtn(1072, 12, 56, 32, '音效开', () => {
+      SETTINGS.sfx = !SETTINGS.sfx; saveSettings();
+      SFX.enabled = SETTINGS.sfx;
       this.ui.muteTxt.setText(SFX.enabled ? '音效开' : '音效关');
-    });
+    }, 13);
     this.ui.muteTxt = mu.txt;
-    const pa = this.mkBtn(1172, 12, 64, 32, '暂停', () => {
-      G.paused = !G.paused;
-      this.ui.pauseTxt.setText(G.paused ? '继续' : '暂停');
-      this.ui.pauseOverlay.setVisible(G.paused);
-    });
-    this.ui.pauseTxt = pa.txt;
+    this.mkBtn(1136, 12, 56, 32, '暂停', () => this.pauseGame(), 13);
+    this.mkBtn(1200, 12, 56, 32, '？', () => { this.ui.howto.setVisible(true); }, 16);
   },
 
   buildField() {
-    // 草地棋盘（双色格）
+    // 草地棋盘（双色像素砖）+ 固定种子装饰（每局同图）
     this.add.rectangle(16, 64, 1248, 416, 0x1e5233).setOrigin(0, 0);
     this.cellRects = [];
     for (let c = 0; c < GRID.cols; c++) {
@@ -636,16 +958,67 @@ Object.assign(GameScene.prototype, {
         this.cellRects[c][r] = rect;
       }
     }
-    this.add.rectangle(16, 64, 1248, 416).setOrigin(0, 0).setStrokeStyle(2, 0x3a3348).setDepth(0);
-    // 塔（左端）
-    this.add.image(TOWER_POS.x, TOWER_POS.y, 'tower').setScale(1.6).setDepth(2);
+    const rng = mulberry32(20261124);
+    for (let c = 0; c < GRID.cols; c++) {
+      for (let r = 0; r < GRID.rows; r++) {
+        const roll = rng();
+        const bx = GRID.x + c * GRID.cw, by = GRID.y + r * GRID.ch;
+        if (roll < 0.30) { // 小草
+          const gx = bx + 8 + Math.floor(rng() * 70), gy = by + 8 + Math.floor(rng() * 70);
+          this.add.rectangle(gx, gy, 2, 8, 0x3fae6a).setOrigin(0, 0).setDepth(0);
+          this.add.rectangle(gx + 4, gy + 2, 2, 6, 0x3fae6a).setOrigin(0, 0).setDepth(0);
+        } else if (roll < 0.38) { // 石块
+          const sx = bx + 12 + Math.floor(rng() * 60), sy = by + 12 + Math.floor(rng() * 60);
+          this.add.rectangle(sx, sy, 10, 7, 0x8a84a0).setOrigin(0, 0).setDepth(0);
+          this.add.rectangle(sx + 2, sy, 6, 3, 0xcfc9dd).setOrigin(0, 0).setDepth(0);
+        } else if (roll < 0.43) { // 小花
+          const fx = bx + 12 + Math.floor(rng() * 60), fy = by + 12 + Math.floor(rng() * 60);
+          this.add.circle(fx, fy, 3, 0xd97b3f).setDepth(0);
+          this.add.circle(fx, fy, 1, 0xe3cf9e).setDepth(0);
+        }
+      }
+    }
+    this.add.rectangle(16, 64, 1248, 416).setOrigin(0, 0).setStrokeStyle(2, 0x8a6d1f).setDepth(0);
+    // 我方木栅栏 + 纵栏（左沿）
+    for (let y = 80; y <= 464; y += 48) {
+      this.add.rectangle(138, y, 8, 26, 0x7a4a2b).setOrigin(0, 0).setDepth(1);
+      this.add.rectangle(138, y, 8, 3, 0x9c6b3f).setOrigin(0, 0).setDepth(1);
+    }
+    this.add.rectangle(136, 76, 4, 392, 0x9c6b3f).setOrigin(0, 0).setDepth(1);
+    // 旗帜（塔后，迎风摆动）
+    this.add.rectangle(60, 120, 4, 60, 0x7a4a2b).setOrigin(0, 0).setDepth(1);
+    const flag = this.add.triangle(64, 120, 0, 0, 34, 8, 0, 16, 0xc9a227).setOrigin(0, 0).setDepth(1);
+    this.tweens.add({ targets: flag, scaleX: 0.85, duration: 500, yoyo: true, repeat: -1 });
+    // 敌方裂缝（右沿，敌人从这里出来）
+    this.add.rectangle(1200, 64, 64, 416, 0x14101c).setOrigin(0, 0).setDepth(0);
+    this.add.rectangle(1196, 64, 4, 416, 0x4a1e6e).setOrigin(0, 0).setDepth(1);
+    for (let i = 0; i < 6; i++) {
+      const ry = 90 + i * 62 + Math.floor(rng() * 20);
+      this.add.triangle(1200, ry, 0, 0, 26, 10, 0, 22, 0x241f30).setOrigin(0, 0).setDepth(1);
+      this.add.circle(1216, ry + 10, 3, 0x8b3fd9).setDepth(1).setAlpha(0.7);
+    }
+    // 波次氛围罩（白天 / 黄昏 / Boss 夜）
+    this.atmo = this.add.rectangle(16, 64, 1248, 416, 0x000000, 0).setOrigin(0, 0).setDepth(1);
+    this.fogBlobs = [];
+    for (let i = 0; i < 5; i++) {
+      const f = this.add.circle(200 + i * 220, 160 + (i % 2) * 140, 70, 0x8b3fd9, 0.05).setDepth(1).setVisible(false);
+      this.tweens.add({ targets: f, x: f.x + 60, duration: 6000 + i * 900, yoyo: true, repeat: -1 });
+      this.fogBlobs.push(f);
+    }
+    // 塔（左端）+ 呼吸光晕
+    this.towerHalo = this.add.circle(TOWER_POS.x, TOWER_POS.y - 6, 46, 0x6fb7d9, 0.16).setDepth(1);
+    this.tweens.add({ targets: this.towerHalo, scaleX: 1.18, scaleY: 1.18, alpha: 0.08, duration: 1400, yoyo: true, repeat: -1 });
+    this.add.image(TOWER_POS.x, TOWER_POS.y, 'tower').setScale(1.5).setDepth(2);
     this.add.rectangle(TOWER_POS.x - 38, 196, 76, 8, 0x5e1f24).setOrigin(0, 0).setDepth(4);
     this.ui.towerBarFg = this.add.rectangle(TOWER_POS.x - 38, 196, 76, 8, 0x3fae6a).setOrigin(0, 0).setDepth(4);
   },
 
   buildBottom() {
+    // ---- 底部三块面板（深底金边） ----
+    this.add.rectangle(16, 496, 288, 176, 0x241f30).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
+    this.add.rectangle(460, 496, 300, 176, 0x241f30).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
+    this.add.rectangle(760, 496, 520, 176, 0x241f30).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
     // ---- 左：掷骰召唤 ----
-    this.add.rectangle(16, 496, 288, 176, 0x241f30).setOrigin(0, 0);
     this.add.text(30, 512, '掷骰 · 3金', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' });
     this.dice = [];
     const diceKeys = ['warrior', 'archer', 'mage'];
@@ -654,7 +1027,7 @@ Object.assign(GameScene.prototype, {
       const k = diceKeys[Math.floor(Math.random() * 3)];
       const die = this.add.container(cx, cy).setDepth(1);
       const face = this.add.rectangle(0, 0, 52, 52, 0xf2ead8).setStrokeStyle(2, 0x14101c);
-      const img = this.add.image(0, 0, k + '_w1').setScale(1.1);
+      const img = this.add.image(0, 0, k + '_idle0').setScale(0.75);
       const pip1 = this.add.circle(-20, -20, 3, 0x14101c);
       const pip2 = this.add.circle(20, 20, 3, 0x14101c);
       die.add([face, img, pip1, pip2]);
@@ -684,7 +1057,7 @@ Object.assign(GameScene.prototype, {
       const x = 770 + i * 165;
       const border = this.add.rectangle(x, 516, 150, 120, 0xcfc9dd).setOrigin(0, 0);
       const bg = this.add.rectangle(x + 2, 518, 146, 116, 0x14101c).setOrigin(0, 0).setInteractive();
-      const img = this.add.image(x + 75, 566, 'warrior_w1').setScale(1.6).setDepth(1);
+      const img = this.add.image(x + 75, 566, 'warrior_idle0').setScale(1.1).setDepth(1);
       const name = this.add.text(x + 75, 606, '', { fontSize: '13px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5, 0);
       const cost = this.add.text(x + 75, 622, '', { fontSize: '12px', color: '#e3cf9e', fontFamily: 'monospace' }).setOrigin(0.5, 0);
       bg.on('pointerdown', () => this.buyShop(i));
@@ -696,8 +1069,37 @@ Object.assign(GameScene.prototype, {
   },
 
   buildOverlays() {
-    // 暂停
-    this.ui.pauseOverlay = this.add.text(GW / 2, GH / 2, '已暂停', { fontSize: '42px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5).setDepth(50).setVisible(false);
+    // 暂停菜单
+    const pa = this.add.container(0, 0).setDepth(50).setVisible(false);
+    pa.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0));
+    pa.add(this.add.rectangle(GW / 2, GH / 2, 420, 420, 0x241f30).setStrokeStyle(2, 0xc9a227));
+    pa.add(this.add.text(GW / 2, 180, '已暂停', { fontSize: '30px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5));
+    const pauseBtn = (y, label, cb) => {
+      const b = this.add.rectangle(GW / 2, y, 240, 48, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
+      const t = this.add.text(GW / 2, y, label, { fontSize: '19px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+      b.on('pointerover', () => b.setFillStyle(0x5b5470));
+      b.on('pointerout', () => b.setFillStyle(0x3a3348));
+      b.on('pointerdown', () => { SFX.click(); cb(); });
+      pa.add([b, t]);
+    };
+    pauseBtn(260, '继续', () => this.resumeGame());
+    pauseBtn(330, '重开一局', () => { this.resumeGame(); clearSave(); this.resetGame(); });
+    pauseBtn(400, '设置', () => { this.ui.settings._refresh(); this.ui.settings.setVisible(true); });
+    pauseBtn(470, '回主菜单', () => { this.resumeGame(); this.quitToMenu(); });
+    this.ui.pauseOverlay = pa;
+    // 设置 / 玩法说明（共用组件）
+    this.ui.settings = createSettingsOverlay(this, 70);
+    this.ui.howto = createHowToOverlay(this, 70);
+    // 新手引导（首次提示）
+    const tut = this.add.container(0, 0).setDepth(40).setVisible(false);
+    tut.add(this.add.rectangle(GW / 2, 120, 560, 96, 0x241f30).setStrokeStyle(2, 0xc9a227));
+    tut.add(this.add.text(GW / 2, 100, '① 把备战席的棋子拖到战场格子里', { fontSize: '17px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5));
+    tut.add(this.add.text(GW / 2, 128, '② 点「开始战斗」开打', { fontSize: '17px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5));
+    const tutBtn = this.add.rectangle(GW / 2, 158, 120, 30, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const tutTxt = this.add.text(GW / 2, 158, '知道了', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace' }).setOrigin(0.5);
+    tutBtn.on('pointerdown', () => { SFX.click(); tut.setVisible(false); markTutDone(); });
+    tut.add([tutBtn, tutTxt]);
+    this.ui.tutBox = tut;
     // 海克斯弹层
     const hex = this.add.container(0, 0).setDepth(40).setVisible(false);
     hex.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0));
@@ -719,7 +1121,7 @@ Object.assign(GameScene.prototype, {
     // 开包揭示弹层
     const rev = this.add.container(0, 0).setDepth(40).setVisible(false);
     rev.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0));
-    rev._img = this.add.image(GW / 2, 300, 'warrior_w1').setScale(3);
+    rev._img = this.add.image(GW / 2, 300, 'warrior_idle0').setScale(3);
     rev._name = this.add.text(GW / 2, 420, '', { fontSize: '26px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
     rev._rar = this.add.text(GW / 2, 460, '', { fontSize: '18px', color: '#c9a227', fontFamily: 'monospace' }).setOrigin(0.5);
     rev.add([rev._img, rev._name, rev._rar]);
@@ -727,12 +1129,19 @@ Object.assign(GameScene.prototype, {
     // 结算弹层
     const end = this.add.container(0, 0).setDepth(45).setVisible(false);
     end.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.75).setOrigin(0, 0));
-    end._title = this.add.text(GW / 2, 240, '', { fontSize: '44px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-    end._stats = this.add.text(GW / 2, 320, '', { fontSize: '17px', color: '#cfc9dd', fontFamily: 'monospace', align: 'center' }).setOrigin(0.5, 0);
-    const rb = this.add.rectangle(GW / 2 - 90, 450, 180, 56, 0x3a3348).setInteractive();
-    const rt = this.add.text(GW / 2, 478, '再来一局', { fontSize: '20px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-    rb.on('pointerdown', () => { SFX.click(); this.resetGame(); });
-    end.add([end._title, end._stats, rb, rt]);
+    end._title = this.add.text(GW / 2, 220, '', { fontSize: '44px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    end._stats = this.add.text(GW / 2, 300, '', { fontSize: '17px', color: '#cfc9dd', fontFamily: 'monospace', align: 'center' }).setOrigin(0.5, 0);
+    const rb = this.add.rectangle(GW / 2 - 115, 450, 200, 56, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
+    const rt = this.add.text(GW / 2 - 115, 450, '再来一局', { fontSize: '20px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    rb.on('pointerover', () => rb.setFillStyle(0x5b5470));
+    rb.on('pointerout', () => rb.setFillStyle(0x3a3348));
+    rb.on('pointerdown', () => { SFX.click(); clearSave(); this.resetGame(); });
+    const qb = this.add.rectangle(GW / 2 + 115, 450, 200, 56, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
+    const qt = this.add.text(GW / 2 + 115, 450, '回主菜单', { fontSize: '20px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    qb.on('pointerover', () => qb.setFillStyle(0x5b5470));
+    qb.on('pointerout', () => qb.setFillStyle(0x3a3348));
+    qb.on('pointerdown', () => { SFX.click(); this.quitToMenu(); });
+    end.add([end._title, end._stats, rb, rt, qb, qt]);
     this.ui.endBox = end;
   },
 
@@ -748,6 +1157,22 @@ Object.assign(GameScene.prototype, {
     this.ui.lvlTxt.setText('Lv' + G.level);
     this.ui.rerollBtn.txt.setText('刷新 ' + (2 + G.rerolls) + '金');
     this.ui.packPityTxt.setText('保底 ' + G.packPity + '/30');
+    // 波次进度条
+    const prog = ((G.wave - 1) + (G.phase === 'battle' ? 0.5 : 0)) / 5;
+    this.ui.waveProg.width = Math.max(0, 120 * prog);
+    // 波次氛围：1–2 白天 / 3–4 黄昏 / 5 Boss 夜 + 紫雾
+    if (G.wave >= 5) {
+      this.atmo.setFillStyle(0x1a1030, 0.35);
+      this.fogBlobs.forEach(f => f.setVisible(true));
+    } else if (G.wave >= 3) {
+      this.atmo.setFillStyle(0xd97b3f, 0.10);
+      this.fogBlobs.forEach(f => f.setVisible(false));
+    } else {
+      this.atmo.setFillStyle(0x000000, 0);
+      this.fogBlobs.forEach(f => f.setVisible(false));
+    }
+    // 塔光晕：低血变红
+    if (this.towerHalo) this.towerHalo.setFillStyle(G.towerHp / G.towerMax < 0.3 ? 0xa83232 : 0x6fb7d9);
     const wv = WAVES[G.wave - 1];
     const desc = wv.list.map(([k, n]) => (k === 'boss' ? '骷髅王' : k === 'elite' ? '精英史莱姆' : ENEMY[k].name) + '×' + n).join(' + ');
     this.ui.waveInfo.setText('第 ' + G.wave + ' 波：' + desc);
@@ -755,13 +1180,13 @@ Object.assign(GameScene.prototype, {
 
   /* ---------- 单位可视化 ---------- */
   spawnUnitSprite(u) {
-    const img = this.add.image(u.x, u.y, u.tex + '_w1').setScale(u.baseScale).setDepth(3);
+    const img = this.add.image(u.x, u.y, u.tex + '_idle0').setScale(u.baseScale).setDepth(3);
     if (u.side === 'player') img.setInteractive({ draggable: true }); // 只有玩家棋子能拖；敌人不可拖
     img._unit = u;
     u.sprite = img;
-    u.hpBg = this.add.rectangle(u.x, u.y - 42, 56, 6, 0x5e1f24).setDepth(4).setVisible(false);
-    u.hpFg = this.add.rectangle(u.x - 28, u.y - 42, 56, 6, 0x3fae6a).setOrigin(0, 0.5).setDepth(4).setVisible(false);
-    u.devTxt = this.add.text(u.x, u.y + 36, '', { fontSize: '11px', color: '#c9a227', fontFamily: 'monospace' }).setOrigin(0.5, 0).setDepth(4).setVisible(false);
+    u.hpBg = this.add.rectangle(u.x, u.y - 54, 56, 6, 0x5e1f24).setDepth(4).setVisible(false);
+    u.hpFg = this.add.rectangle(u.x - 28, u.y - 54, 56, 6, 0x3fae6a).setOrigin(0, 0.5).setDepth(4).setVisible(false);
+    u.devTxt = this.add.text(u.x, u.y + 52, '', { fontSize: '11px', color: '#c9a227', fontFamily: 'monospace' }).setOrigin(0.5, 0).setDepth(4).setVisible(false);
     u.starImgs = [];
     return img;
   },
@@ -770,7 +1195,7 @@ Object.assign(GameScene.prototype, {
     u.starImgs = [];
     if (u.side !== 'player' || !u.sprite) return;
     for (let i = 0; i < u.star; i++) {
-      const s = this.add.image(u.x - (u.star - 1) * 7 + i * 14, u.y - 52, 'spark').setScale(0.9).setDepth(4).setTint(0xc9a227);
+      const s = this.add.image(u.x - (u.star - 1) * 7 + i * 14, u.y - 66, 'spark').setScale(0.9).setDepth(4).setTint(0xc9a227);
       u.starImgs.push(s);
     }
   },
@@ -782,7 +1207,7 @@ Object.assign(GameScene.prototype, {
     } else u.devTxt.setVisible(false);
   },
   destroyUnitVisual(u) {
-    if (u.sprite && u.sprite.active) u.sprite.destroy();
+    if (u.sprite && u.sprite.active) { this.tweens.killTweensOf(u.sprite); u.sprite.destroy(); }
     if (u.hpBg && u.hpBg.active) u.hpBg.destroy();
     if (u.hpFg && u.hpFg.active) u.hpFg.destroy();
     if (u.devTxt && u.devTxt.active) u.devTxt.destroy();
@@ -793,14 +1218,14 @@ Object.assign(GameScene.prototype, {
     if (!u.sprite) return;
     u.sprite.setPosition(u.x, u.y);
     const onField = u.cell !== null && u.side === 'player';
-    if (u.hpBg) u.hpBg.setVisible(onField).setPosition(u.x, u.y - 42);
-    if (u.hpFg) u.hpFg.setVisible(onField).setPosition(u.x - 28, u.y - 42);
+    if (u.hpBg) u.hpBg.setVisible(onField).setPosition(u.x, u.y - 54);
+    if (u.hpFg) u.hpFg.setVisible(onField).setPosition(u.x - 28, u.y - 54);
     if (u.hpFg) u.hpFg.width = Math.max(0, 56 * u.hp / u.maxHp);
     for (let i = 0; i < u.starImgs.length; i++) {
-      u.starImgs[i].setVisible(onField).setPosition(u.x - (u.star - 1) * 7 + i * 14, u.y - 52);
+      u.starImgs[i].setVisible(onField).setPosition(u.x - (u.star - 1) * 7 + i * 14, u.y - 66);
     }
     this.updateDevText(u);
-    if (u.devTxt) u.devTxt.setPosition(u.x, u.y + 36);
+    if (u.devTxt) u.devTxt.setPosition(u.x, u.y + 52);
   },
 
   /* ---------- 开局 ---------- */
@@ -810,15 +1235,20 @@ Object.assign(GameScene.prototype, {
     Object.assign(G, {
       phase: 'prep', wave: 1, gold: 8, level: 1, xp: 0, xpNeed: 2,
       towerHp: 100, baseGold: 5, interestCap: 5, rerolls: 0,
-      speedMul: 1, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
+      speedMul: SETTINGS.speed, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
       field: [], bench: [null, null, null, null, null], shop: [], enemies: [],
-      hitStopUntil: 0, dragUnit: null, diceBusy: false
+      hitStopUntil: 0, dragUnit: null, diceBusy: false,
+      stats: { startTime: Date.now(), kills: 0, goldEarned: 0 }
     });
-    this.ui.speedTxt.setText('1x');
+    this.ui.speedTxt.setText(SETTINGS.speed + 'x');
     this.ui.endBox.setVisible(false);
     this.ui.hexBox.setVisible(false);
     this.ui.revealBox.setVisible(false);
     this.ui.pauseOverlay.setVisible(false);
+    this.ui.settings.setVisible(false);
+    this.ui.howto.setVisible(false);
+    this.ui.tutBox.setVisible(!tutDone());
+    BGM.setMode('normal');
     // 开局送 1 战士 + 1 弓手（白）进备战席
     this.addToBench(makeUnit('warrior', 'N', 'player'));
     this.addToBench(makeUnit('archer', 'N', 'player'));
@@ -835,7 +1265,7 @@ Object.assign(GameScene.prototype, {
     const cx = 496 + idx * 58, cy = 666;
     u.x = cx; u.y = cy;
     if (!u.sprite) this.spawnUnitSprite(u);
-    u.sprite.setScale(1.6).setTexture(u.tex + '_w1');
+    u.sprite.setScale(1.1).setTexture(u.tex + '_idle0');
     this.syncUnitVisual(u);
     return idx;
   }
@@ -938,7 +1368,7 @@ Object.assign(GameScene.prototype, {
     u.cell = cell;
     const pt = cellCenter(cell.c, cell.r);
     u.x = pt.x; u.y = pt.y;
-    u.sprite.setScale(u.baseScale).setTexture(u.tex + '_w1');
+    u.sprite.setScale(u.baseScale).setTexture(u.tex + '_idle0');
     this.syncUnitVisual(u);
     this.updateTop();
     return true;
@@ -956,18 +1386,18 @@ Object.assign(GameScene.prototype, {
         occ.cell = oldCell;
         const pt = cellCenter(oldCell.c, oldCell.r);
         occ.x = pt.x; occ.y = pt.y;
-        occ.sprite.setScale(occ.baseScale).setTexture(occ.tex + '_w1');
+        occ.sprite.setScale(occ.baseScale).setTexture(occ.tex + '_idle0');
         this.syncUnitVisual(occ);
       } else { // 占位者换到拖动者原来的备战席格
         G.bench[oldBench] = occ;
         occ.x = 496 + oldBench * 58; occ.y = 666;
-        occ.sprite.setScale(1.6);
+        occ.sprite.setScale(1.1);
         this.syncUnitVisual(occ);
       }
     }
     G.bench[idx] = u;
     u.x = 496 + idx * 58; u.y = 666;
-    u.sprite.setScale(1.6).setTexture(u.tex + '_w1');
+    u.sprite.setScale(1.1).setTexture(u.tex + '_idle0');
     this.syncUnitVisual(u);
     this.updateTop();
   },
@@ -986,13 +1416,13 @@ Object.assign(GameScene.prototype, {
     G.bench[bi] = fieldU;
     fieldU.cell = null;
     fieldU.x = 496 + bi * 58; fieldU.y = 666;
-    fieldU.sprite.setScale(1.6).setTexture(fieldU.tex + '_w1');
+    fieldU.sprite.setScale(1.1).setTexture(fieldU.tex + '_idle0');
     this.syncUnitVisual(fieldU);
     G.field.push(benchU);
     benchU.cell = cell;
     const pt = cellCenter(cell.c, cell.r);
     benchU.x = pt.x; benchU.y = pt.y;
-    benchU.sprite.setScale(benchU.baseScale).setTexture(benchU.tex + '_w1');
+    benchU.sprite.setScale(benchU.baseScale).setTexture(benchU.tex + '_idle0');
     this.syncUnitVisual(benchU);
     this.updateTop();
   },
@@ -1050,7 +1480,7 @@ Object.assign(GameScene.prototype, {
       const c = this.shopCards[i];
       const r = RARITY.find(x => x.key === card.rarity);
       c.border.setFillStyle(hexColor(r.color));
-      c.img.setTexture(CLASSES[card.cls].tex + '_w1');
+      c.img.setTexture(CLASSES[card.cls].tex + '_idle0');
       c.name.setText(CLASSES[card.cls].name + ' · ' + r.name).setColor(r.color);
       c.cost.setText(r.cost + '金');
     });
@@ -1109,7 +1539,7 @@ Object.assign(GameScene.prototype, {
         SFX.click();
         for (const die of this.dice) {
           const k = keys[Math.floor(Math.random() * 3)];
-          die._cls = k; die._img.setTexture(k + '_w1');
+          die._cls = k; die._img.setTexture(k + '_idle0');
           die.setAngle(Math.random() * 24 - 12);
           die.y = 578 + (Math.random() * 8 - 4);
         }
@@ -1158,7 +1588,7 @@ Object.assign(GameScene.prototype, {
     const best = got.slice().sort((a, b) => RARITY.findIndex(x => x.key === b.rarity) - RARITY.findIndex(x => x.key === a.rarity))[0];
     const r = RARITY.find(x => x.key === best.rarity);
     const rev = this.ui.revealBox;
-    rev._img.setTexture(CLASSES[best.cls].tex + '_w1');
+    rev._img.setTexture(CLASSES[best.cls].tex + '_idle0');
     rev._name.setText(CLASSES[best.cls].name);
     rev._rar.setText(r.name + (best.rarity === 'SSR' ? '！！' : '')).setColor(r.color);
     rev.setVisible(true);
@@ -1210,6 +1640,7 @@ Object.assign(GameScene.prototype, {
     this.refreshShop();
     G.phase = 'prep';
     this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
+    this.saveGame();
     this.updateTop();
   }
 });
@@ -1233,6 +1664,12 @@ Object.assign(GameScene.prototype, {
       const r = this.add.rectangle(x, y, s, s, color).setDepth(6);
       const a = Math.random() * Math.PI * 2, v = speed * (0.4 + Math.random() * 0.8);
       this.tweens.add({ targets: r, x: x + Math.cos(a) * v * 0.4, y: y + Math.sin(a) * v * 0.4 - 12, alpha: 0, duration: 380 + Math.random() * 220, onComplete: () => r.destroy() });
+    }
+  },
+  coinDrop(x, y) { // 敌人死亡掉 3 枚金币（纯视觉）
+    for (let i = 0; i < 3; i++) {
+      const c = this.add.circle(x + (Math.random() * 30 - 15), y, 4, 0xc9a227).setDepth(7);
+      this.tweens.add({ targets: c, y: y - 24 - Math.random() * 14, alpha: 0, duration: 500 + i * 80, onComplete: () => c.destroy() });
     }
   },
   hitSpark(x, y, color) {
@@ -1260,7 +1697,7 @@ Object.assign(GameScene.prototype, {
   fireArrow(u, t, onHit) {
     const a = this.add.image(u.x, u.y - 6, 'arrow').setDepth(6);
     a.setRotation(Math.atan2(t.y - u.y, t.x - u.x));
-    this.tweens.add({ targets: a, x: t.x, y: t.y - 6, duration: 150, onComplete: () => { a.destroy(); onHit(); } });
+    this.tweens.add({ targets: a, x: t.x, y: t.y - 6, duration: 150, onComplete: () => { onHit(); this.time.delayedCall(200, () => a.destroy()); } }); // 箭插在目标身上 0.2 秒
   },
   fireOrb(u, t, onHit) {
     const o = this.add.image(u.x, u.y - 10, 'orb').setDepth(6);
@@ -1270,28 +1707,39 @@ Object.assign(GameScene.prototype, {
       onComplete: () => { o.destroy(); this.ringFx(t.x, t.y, 0x8b3fd9, 46); this.spawnParticles(t.x, t.y, 0x8b3fd9, 10, 130); onHit(); }
     });
   },
+  groundCrack(x, y) { // 战士 / Boss 劈砍留下的地面裂纹，0.4 秒消失
+    const g = this.add.graphics().setDepth(5);
+    g.lineStyle(3, 0x14101c, 0.9);
+    g.beginPath(); g.moveTo(x - 18, y + 16); g.lineTo(x - 4, y + 22); g.lineTo(x + 10, y + 18); g.lineTo(x + 20, y + 24); g.strokePath();
+    this.tweens.add({ targets: g, alpha: 0, duration: 400, onComplete: () => g.destroy() });
+  },
   bossSlamFx(u, t) {
     this.slashArc(t.x, t.y, 0xd97b3f);
+    this.groundCrack(t.x, t.y);
     this.ringFx(t.x, t.y + 10, 0xd97b3f, 90);
-    this.cameras.main.shake(220, 0.014);
+    this.shake(220, 0.014);
     this.hitStop(110);
   },
-  bossAoE(u) { // Boss 每 3 次攻击：骨刺冲击波（范围伤害）
+  bossAoE(u) { // Boss 每 3 次攻击：骨刺冲击波（预警红圈 350ms 再落下）
     const cx = u.target ? u.target.x : u.x, cy = u.target ? u.target.y : u.y;
-    this.ringFx(cx, cy, 0xa83232, 130);
+    const tele = this.add.circle(cx, cy, 130).setStrokeStyle(3, 0xa83232).setDepth(6).setAlpha(0.6);
+    this.tweens.add({ targets: tele, alpha: 0.15, duration: 350, yoyo: true, onComplete: () => tele.destroy() });
     SFX.slam();
-    for (const p of [...G.field]) {
-      if (!p.alive) continue;
-      if (Math.hypot(p.x - cx, p.y - cy) <= 130) {
-        const dmg = Math.max(1, Math.round(u.atk * 0.5));
-        p.hp -= dmg;
-        p.poseUntil = this.time.now + 150;
-        if (p.sprite) p.sprite.setTexture(p.tex + '_hit');
-        this.floatText(p.x, p.y - 46, String(dmg), '#ff8888', 16);
-        this.hitSpark(p.x, p.y - 6, 0xa83232);
-        if (p.hp <= 0) this.killUnit(p);
+    this.time.delayedCall(350, () => {
+      this.ringFx(cx, cy, 0xa83232, 130);
+      for (const p of [...G.field]) {
+        if (!p.alive) continue;
+        if (Math.hypot(p.x - cx, p.y - cy) <= 130) {
+          const dmg = Math.max(1, Math.round(u.atk * 0.5));
+          p.hp -= dmg;
+          p.poseUntil = this.time.now + 150;
+          if (p.sprite) p.sprite.setTexture(p.tex + '_hit');
+          this.floatText(p.x, p.y - 46, String(dmg), '#ff8888', 16);
+          this.hitSpark(p.x, p.y - 6, 0xa83232);
+          if (p.hp <= 0) this.killUnit(p);
+        }
       }
-    }
+    });
   },
   hitStop(ms) { G.hitStopUntil = this.time.now + ms; },
   bossIntro() {
@@ -1299,7 +1747,7 @@ Object.assign(GameScene.prototype, {
     this.tweens.add({ targets: flash, alpha: 0, duration: 500, onComplete: () => flash.destroy() });
     const t = this.add.text(GW / 2, 240, '骷髅王 来袭！', { fontSize: '40px', color: '#a83232', fontFamily: 'monospace', fontStyle: 'bold', stroke: '#14101c', strokeThickness: 6 }).setOrigin(0.5).setDepth(31);
     this.tweens.add({ targets: t, alpha: 0, y: 210, duration: 1200, onComplete: () => t.destroy() });
-    this.cameras.main.shake(300, 0.015);
+    this.shake(300, 0.015);
     SFX.boss();
   },
 
@@ -1349,16 +1797,23 @@ Object.assign(GameScene.prototype, {
     return null;
   },
   setWalkFrame(u) {
-    const idx = Math.floor(u.animT / 0.14) % 3;
+    const idx = Math.floor(u.animT / 0.1) % 4;
     const key = u.tex + '_w' + idx;
-    if (u.sprite.texture.key !== key && this.time.now >= (u.poseUntil || 0)) u.sprite.setTexture(key);
+    if (u.sprite.texture.key !== key && this.time.now >= (u.poseUntil || 0)) {
+      u.sprite.setTexture(key);
+      // 走路弹跳：压低再弹回
+      this.tweens.add({ targets: u.sprite, scaleY: u.baseScale * 0.92, duration: 55, yoyo: true, onComplete: () => { if (u.sprite) u.sprite.setScale(u.baseScale); } });
+    }
   },
   setIdleFrame(u) {
-    if (this.time.now >= (u.poseUntil || 0) && u.sprite.texture.key !== u.tex + '_w1') u.sprite.setTexture(u.tex + '_w1');
+    if (this.time.now >= (u.poseUntil || 0)) {
+      const key = u.tex + (Math.floor(u.animT / 0.6) % 2 === 0 ? '_idle0' : '_idle1'); // 待机眨眼
+      if (u.sprite.texture.key !== key) u.sprite.setTexture(key);
+    }
   },
   syncHpBar(u) {
     if (!u.hpBg || !u.hpFg) return;
-    const off = u.isBoss ? 66 : u.isElite ? 56 : 42;
+    const off = u.isBoss ? 68 : u.isElite ? 58 : 54;
     const vis = u.alive && (u.side === 'enemy' || u.cell !== null);
     u.hpBg.setVisible(vis).setPosition(u.x, u.y - off);
     u.hpFg.setVisible(vis).setPosition(u.x - 28, u.y - off);
@@ -1370,16 +1825,23 @@ Object.assign(GameScene.prototype, {
   doAttack(u, t) {
     u.atkCount += 1;
     u.poseUntil = this.time.now + 220;
-    if (u.sprite) u.sprite.setTexture(u.tex + '_atk');
+    if (u.sprite) {
+      // 攻击三段帧：蓄力 → 挥出 → 收势（12 张/秒）
+      u.sprite.setTexture(u.tex + '_atk0');
+      this.time.delayedCall(75, () => { if (u.alive && u.sprite && this.time.now < u.poseUntil) u.sprite.setTexture(u.tex + '_atk1'); });
+      this.time.delayedCall(150, () => { if (u.alive && u.sprite && this.time.now < u.poseUntil) u.sprite.setTexture(u.tex + '_atk2'); });
+      this.tweens.add({ targets: u.sprite, scaleX: u.baseScale * 1.12, duration: 75, yoyo: true });
+    }
     if (t.isTower) {
       this.time.delayedCall(90, () => { this.damageTower(u); this.hitSpark(TOWER_POS.x + 20, TOWER_POS.y, 0xd97b3f); });
       return;
     }
-    if (u.cls === 'warrior') { // 战士：刀光弧
+    if (u.cls === 'warrior') { // 战士：刀光弧 + 地面裂纹
       SFX.slash();
       this.slashArc(t.x, t.y, 0xffffff);
+      this.groundCrack(t.x, t.y);
       this.time.delayedCall(90, () => this.applyDamage(u, t, 1));
-    } else if (u.cls === 'archer') { // 弓手：箭矢弹道
+    } else if (u.cls === 'archer') { // 弓手：箭矢弹道（命中后插 0.2 秒）
       SFX.shoot();
       this.fireArrow(u, t, () => this.applyDamage(u, t, 1));
     } else if (u.cls === 'mage') { // 术士：法球 + 落点法环
@@ -1406,13 +1868,16 @@ Object.assign(GameScene.prototype, {
     dmg = Math.max(1, Math.round(dmg));
     def.hp -= dmg;
     def.poseUntil = this.time.now + 150;
-    if (def.sprite) def.sprite.setTexture(def.tex + '_hit');
+    if (def.sprite) {
+      def.sprite.setTexture(def.tex + '_hit');
+      this.tweens.add({ targets: def.sprite, angle: -8, duration: 80, yoyo: true, onComplete: () => { if (def.sprite) def.sprite.setAngle(0); } }); // 受击后仰
+    }
     this.floatText(def.x + (Math.random() * 20 - 10), def.y - 46, String(dmg), isCrit ? '#c9a227' : '#ffffff', isCrit ? 26 : 16, isCrit);
     const sparkColor = att.cls === 'warrior' ? 0xffffff : att.cls === 'archer' ? 0x3fae6a : att.cls === 'mage' ? 0x8b3fd9 : att.cls === 'boss' ? 0xd97b3f : 0x3fae6a;
     this.hitSpark(def.x, def.y - 6, sparkColor);
     if (isCrit) {
       SFX.crit();
-      this.cameras.main.shake(140, 0.012);
+      this.shake(140, 0.012);
       this.hitStop(90);
       this.starburst(def.x, def.y - 10);
     } else SFX.hit();
@@ -1423,16 +1888,20 @@ Object.assign(GameScene.prototype, {
     const dmg = Math.max(1, Math.round(u.atk));
     G.towerHp = Math.max(0, G.towerHp - dmg);
     this.floatText(TOWER_POS.x, TOWER_POS.y - 60, '-' + dmg, '#ff8888', 16);
-    this.cameras.main.shake(120, 0.008);
+    this.shake(120, 0.008);
     SFX.hit();
     this.updateTop();
     if (G.towerHp <= 0) this.endWave(false);
   },
   killUnit(u) {
     u.alive = false; u.hp = 0;
-    if (u.sprite) u.sprite.setTexture(u.tex + '_die');
+    if (u.sprite) { this.tweens.killTweensOf(u.sprite); u.sprite.setTexture(u.tex + '_die'); }
     this.spawnParticles(u.x, u.y, u.side === 'player' ? 0xcfc9dd : 0x3fae6a, u.isBoss ? 30 : 12, 160);
-    if (u.isBoss) { this.cameras.main.shake(400, 0.02); this.hitStop(150); SFX.win(); }
+    if (u.side === 'enemy') {
+      if (G.stats) G.stats.kills += 1;
+      this.coinDrop(u.x, u.y); // 敌人死亡掉金币（纯视觉，不加经济）
+    }
+    if (u.isBoss) { this.shake(400, 0.02); this.hitStop(150); SFX.win(); }
     if (u.hpBg) u.hpBg.setVisible(false);
     if (u.hpFg) u.hpFg.setVisible(false);
     for (const s of u.starImgs) s.setVisible(false);
@@ -1445,9 +1914,13 @@ Object.assign(GameScene.prototype, {
   startBattle() {
     if (G.phase !== 'prep' || G.paused) return;
     if (G.field.length === 0) { this.floatText(GW / 2, 200, '先拖至少 1 个棋子上场', '#ff8888', 16); return; }
+    this.saveGame(); // 开打前存档：继续时回到本波备战
+    this.ui.tutBox.setVisible(false); markTutDone(); // 新手引导完成
+    BGM.setMode(G.wave === 5 ? 'boss' : 'normal');
     G.phase = 'battle';
     this.ui.startBtn.setVisible(false); this.ui.startTxt.setVisible(false);
     SFX.tone(220, 0.15, 'sawtooth', 0.10, 440);
+    this.updateTop();
     this.spawnWave(G.wave);
   },
   spawnWave(w) {
@@ -1466,7 +1939,7 @@ Object.assign(GameScene.prototype, {
           this.spawnUnitSprite(e);
           e.sprite.setFlipX(true);
           e.sprite.setScale(e.baseScale);
-          e.sprite.setTexture(e.tex + '_w1');
+          e.sprite.setTexture(e.tex + '_idle0');
           this.syncHpBar(e);
           this.spawnParticles(e.x, e.y, 0x8b3fd9, 8, 100);
           if (e.isBoss) this.bossIntro();
@@ -1482,6 +1955,7 @@ Object.assign(GameScene.prototype, {
     const interest = Math.min(G.interestCap, Math.floor(G.gold / 10));
     const gain = G.baseGold + 1 + interest;
     G.gold += gain;
+    if (G.stats) G.stats.goldEarned += gain;
     SFX.coin();
     this.floatText(GW / 2, 200, '第 ' + G.wave + ' 波胜利！+' + gain + '金（基础' + G.baseGold + ' 胜利1 利息' + interest + '）', '#e3cf9e', 18);
     if (G.wave === 3) {
@@ -1495,18 +1969,139 @@ Object.assign(GameScene.prototype, {
       this.refreshShop();
       G.phase = 'prep';
       this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
+      this.saveGame();
       this.updateTop();
     });
   },
   gameOver(win) {
     G.phase = 'over';
-    const stats = '波次 ' + G.wave + ' / 5　金币 ' + G.gold + '　等级 Lv' + G.level + '　海克斯 ' + G.hexesTaken.length + ' 个';
+    saveBest(G.wave);
+    clearSave();
+    if (win) { // 胜利姿势
+      for (const u of [...G.field]) if (u.alive && u.sprite) u.sprite.setTexture(u.tex + '_win');
+    }
+    const secs = G.stats ? Math.floor((Date.now() - G.stats.startTime) / 1000) : 0;
+    const stats = '用时 ' + Math.floor(secs / 60) + '分' + (secs % 60) + '秒　击杀 ' + (G.stats ? G.stats.kills : 0) + '　获得金币 ' + (G.stats ? G.stats.goldEarned : 0) + '\n最高波次 ' + loadBest() + ' / 5　等级 Lv' + G.level + '　海克斯 ' + G.hexesTaken.length + ' 个';
     this.ui.endBox._title.setText(win ? '胜利！' : '失败…').setColor(win ? '#c9a227' : '#a83232');
     this.ui.endBox._stats.setText((win ? '你守住了 5 波进攻，军团无敌！' : '塔被攻破了，军团覆灭…') + '\n' + stats);
     this.ui.endBox.setVisible(true);
     if (win) SFX.win(); else SFX.lose();
   }
 });
+
+/* ============================================================
+   暂停 / 回主菜单 / 存档读档
+   ============================================================ */
+Object.assign(GameScene.prototype, {
+  shake(dur, intensity) { if (SETTINGS.shake) this.cameras.main.shake(dur, intensity); },
+  pauseGame() {
+    if (G.phase === 'over' || G.paused) return;
+    G.paused = true;
+    this.ui.pauseOverlay.setVisible(true);
+    this.tweens.pauseAll();
+    this.time.paused = true;
+    BGM.paused = true;
+    if (SFX.ctx && SFX.ctx.state === 'running') SFX.ctx.suspend();
+  },
+  resumeGame() {
+    G.paused = false;
+    this.ui.pauseOverlay.setVisible(false);
+    this.tweens.resumeAll();
+    this.time.paused = false;
+    BGM.paused = false;
+    if (SFX.ctx && SFX.ctx.state === 'suspended') SFX.ctx.resume();
+  },
+  quitToMenu() {
+    this.saveGame();
+    G.paused = false;
+    this.tweens.resumeAll();
+    this.time.paused = false;
+    BGM.paused = false;
+    this.scene.stop('Game');
+    this.scene.start('Menu');
+  },
+  saveGame() {
+    if (G.phase === 'over' || G.phase === 'battle') return; // 只在备战/结算间隙存
+    const snap = {
+      wave: G.wave, gold: G.gold, level: G.level, xp: G.xp, xpNeed: G.xpNeed,
+      towerHp: G.towerHp, buffs: G.buffs, hexesTaken: G.hexesTaken, packPity: G.packPity,
+      field: G.field.map(u => snapUnit(u)), bench: G.bench.map(u => u ? snapUnit(u) : null),
+      shop: G.shop
+    };
+    try { localStorage.setItem('syjt_save_v1', JSON.stringify(snap)); } catch (e) {}
+  },
+  loadSave() {
+    const snap = loadSave();
+    this.resetGame();
+    if (!snap) return;
+    // 移除开局赠送的两个单位
+    for (const u of [...G.bench]) if (u) this.destroyUnitVisual(u);
+    G.bench = [null, null, null, null, null];
+    G.field = [];
+    Object.assign(G, {
+      wave: snap.wave, gold: snap.gold, level: snap.level, xp: snap.xp, xpNeed: snap.xpNeed,
+      towerHp: snap.towerHp, buffs: snap.buffs || {}, hexesTaken: snap.hexesTaken || [], packPity: snap.packPity || 0
+    });
+    G.shop = snap.shop && snap.shop.length ? snap.shop : G.shop;
+    (snap.field || []).forEach(su => {
+      const u = restoreUnit(su);
+      const pt = cellCenter(su.cell.c, su.cell.r);
+      G.field.push(u); u.cell = su.cell; u.x = pt.x; u.y = pt.y;
+      this.spawnUnitSprite(u);
+      u.sprite.setScale(u.baseScale).setTexture(u.tex + '_idle0');
+      this.refreshStars(u);
+      this.syncUnitVisual(u);
+    });
+    (snap.bench || []).forEach((su, i) => {
+      if (!su) return;
+      const u = restoreUnit(su);
+      G.bench[i] = u; u.cell = null; u.x = 496 + i * 58; u.y = 666;
+      this.spawnUnitSprite(u);
+      u.sprite.setScale(1.1).setTexture(u.tex + '_idle0');
+      this.refreshStars(u);
+      this.syncUnitVisual(u);
+    });
+    this.renderShop();
+    this.updateTop();
+  }
+});
+
+/* ============================================================
+   主菜单
+   ============================================================ */
+class MenuScene extends Phaser.Scene {
+  constructor() { super('Menu'); }
+  create() {
+    buildAllTextures(this);
+    // 夜色背景
+    this.add.rectangle(0, 0, GW, GH, 0x14101c).setOrigin(0, 0);
+    this.add.circle(1080, 110, 46, 0xe3cf9e);
+    this.add.circle(1066, 100, 40, 0x14101c); // 月牙
+    // 草地 + 剪影棋子来回走动
+    this.add.rectangle(0, 420, GW, 320, 0x1e5233).setOrigin(0, 0);
+    const keys = ['warrior_idle0', 'archer_idle0', 'mage_idle0', 'slime_idle0', 'bat_idle0'];
+    for (let i = 0; i < 5; i++) {
+      const s = this.add.image(150 + i * 220, 560, keys[i]).setScale(2.5).setTint(0x241f30).setAlpha(0.85);
+      this.tweens.add({ targets: s, x: s.x + 40, duration: 2600 + i * 300, yoyo: true, repeat: -1 });
+    }
+    // LOGO
+    this.add.text(GW / 2, 150, '噬运军团', { fontSize: '72px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold', stroke: '#14101c', strokeThickness: 8 }).setOrigin(0.5);
+    this.add.text(GW / 2, 215, '像素自走棋 · 吞噬进化', { fontSize: '20px', color: '#cfc9dd', fontFamily: 'monospace' }).setOrigin(0.5);
+    // 按钮
+    const hasSave = !!loadSave();
+    const best = loadBest();
+    menuBtn(this, GW / 2, 320, 260, 52, '开始游戏', () => { clearSave(); this.scene.start('Game'); }, 22);
+    const cont = menuBtn(this, GW / 2, 390, 260, 52, '继续', () => { CONTINUE_RUN = true; this.scene.start('Game'); }, 22);
+    if (!hasSave) { cont.bg.setAlpha(0.4); cont.txt.setAlpha(0.4); cont.bg.disableInteractive(); }
+    menuBtn(this, GW / 2, 460, 260, 52, '玩法说明', () => this._howto.setVisible(true), 22);
+    menuBtn(this, GW / 2, 530, 260, 52, '设置', () => this._settings.setVisible(true), 22);
+    this.add.text(GW / 2, 600, best > 0 ? '最高波次：第 ' + best + ' 波 / 5' : '最高波次：—', { fontSize: '16px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
+    this.add.text(GW - 16, GH - 16, 'v0.2', { fontSize: '14px', color: '#5b5470', fontFamily: 'monospace' }).setOrigin(1, 1);
+    this._settings = createSettingsOverlay(this, 60);
+    this._howto = createHowToOverlay(this, 60);
+    this.input.on('pointerdown', () => SFX.ac());
+  }
+}
 
 /* ============================================================
    启动
@@ -1519,7 +2114,7 @@ const config = {
   backgroundColor: '#241f2e',
   pixelArt: true,
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
-  scene: [GameScene]
+  scene: [MenuScene, GameScene]
 };
 window.addEventListener('load', () => { new Phaser.Game(config); });
 </script>
