@@ -1234,7 +1234,7 @@ Object.assign(GameScene.prototype, {
       const icon = this.add.image(x + 110, 292, 'relic_crown').setScale(2).setDepth(1);
       const name = this.add.text(x + 110, 322, '', { fontSize: '22px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0);
       const price = this.add.text(x + 110, 356, '', { fontSize: '16px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0);
-      const desc = this.add.text(x + 110, 392, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 180 }, align: 'center' }).setOrigin(0.5, 0);
+      const desc = this.add.text(x + 110, 392, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 180, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
       const sold = this.add.text(x + 110, 440, '已购', { fontSize: '18px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0).setVisible(false);
       bg.on('pointerdown', () => this.buyRelic(i));
       rl.add([border, bg, icon, name, price, desc, sold]);
@@ -1289,7 +1289,7 @@ Object.assign(GameScene.prototype, {
     rd.add([rdBg, rdPanel]);
     rd._title = this.add.text(GW / 2, 268, '', { fontSize: '22px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
     rd._icon = this.add.image(GW / 2, 300, 'relic_crown').setScale(2);
-    rd._desc = this.add.text(GW / 2, 336, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 300 }, align: 'center' }).setOrigin(0.5, 0);
+    rd._desc = this.add.text(GW / 2, 336, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 300, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
     rd._status = this.add.text(GW / 2, 400, '', { fontSize: '13px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
     const rdCloseBg = this.add.rectangle(GW / 2, 448, 120, 36, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
     const rdCloseTxt = this.add.text(GW / 2, 448, '关闭', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5);
