@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>噬运军团 · v0.4</title>
+<title>噬运军团 · v0.5</title>
 <link rel="icon" href="data:,">
 <style>
   html, body { margin: 0; padding: 0; background: #0b0910; height: 100%; overflow: hidden; }
@@ -20,7 +20,7 @@
 <script>
 'use strict';
 /* ============================================================
-   噬运军团 · v0.4（M3：经济加钱 + 撤退/休整 + 免费骰子 + 飞身踢重做）
+   噬运军团 · v0.5（M4：骰子遗物 + 遗物铺 + 底部图标栏）
    Phaser 4.2.1（jsdelivr CDN，唯一外部资源）
    所有美术：代码在 canvas 上逐像素画的精灵（48x48，Boss 64x64，12 帧/角色）
    音效：WebAudio 合成 SFX + 循环 BGM，无外部音频
@@ -651,6 +651,39 @@ function drawSparkTex(ctx) { // 12x12 四角星火花
   px(ctx, 3, 3, PAL.Y); px(ctx, 8, 3, PAL.Y); px(ctx, 3, 8, PAL.Y); px(ctx, 8, 8, PAL.Y);
   px(ctx, 5, 5, PAL.Y); px(ctx, 6, 6, PAL.Y);
 }
+function drawRelicTex(ctx, id) { // 16x16 遗物小图标（逐像素画，颜色各不相同）
+  const { K, W, G, Y, R, O, C, L, E, N, P, V, B } = PAL;
+  if (id === 'crown') { // 金色小王冠
+    rect(ctx, 2, 5, 3, 6, G); rect(ctx, 6, 3, 4, 8, G); rect(ctx, 11, 5, 3, 6, G);
+    rect(ctx, 3, 10, 10, 3, G); rect(ctx, 3, 13, 10, 1, Y);
+    px(ctx, 7, 7, R); px(ctx, 8, 7, R); px(ctx, 4, 8, Y); px(ctx, 11, 8, Y);
+  } else if (id === 'bell') { // 红铃铛
+    px(ctx, 7, 2, O); px(ctx, 8, 2, O); px(ctx, 7, 3, O); px(ctx, 8, 3, O);
+    rect(ctx, 5, 4, 6, 7, R); rect(ctx, 4, 11, 8, 2, R);
+    px(ctx, 6, 6, W); px(ctx, 7, 13, Y); px(ctx, 8, 13, Y);
+  } else if (id === 'mirror') { // 蓝色小镜子
+    rect(ctx, 4, 2, 8, 8, C); rect(ctx, 5, 3, 6, 6, L);
+    px(ctx, 6, 4, C); px(ctx, 9, 6, C); px(ctx, 7, 7, C);
+    rect(ctx, 7, 10, 2, 4, B); rect(ctx, 6, 14, 4, 1, B);
+  } else if (id === 'golden') { // 金色骰子（5 点）
+    rect(ctx, 3, 3, 10, 10, Y);
+    rect(ctx, 3, 3, 10, 1, G); rect(ctx, 3, 12, 10, 1, G); rect(ctx, 3, 3, 1, 10, G); rect(ctx, 12, 3, 1, 10, G);
+    px(ctx, 5, 5, K); px(ctx, 10, 5, K); px(ctx, 7, 8, K); px(ctx, 5, 10, K); px(ctx, 10, 10, K);
+  } else if (id === 'beads') { // 两颗相连的珠子
+    rect(ctx, 1, 7, 14, 1, N); // 串绳
+    rect(ctx, 2, 5, 6, 6, E); rect(ctx, 8, 5, 6, 6, E);
+    px(ctx, 3, 6, W); px(ctx, 9, 6, W);
+    px(ctx, 2, 5, N); px(ctx, 7, 5, N); px(ctx, 8, 5, N); px(ctx, 13, 5, N);
+    px(ctx, 2, 10, N); px(ctx, 7, 10, N); px(ctx, 8, 10, N); px(ctx, 13, 10, N);
+  } else if (id === 'fate') { // 三颗小骰子叠放
+    rect(ctx, 5, 2, 6, 6, P);
+    rect(ctx, 5, 2, 6, 1, V); rect(ctx, 5, 7, 6, 1, V); rect(ctx, 5, 2, 1, 6, V); rect(ctx, 10, 2, 1, 6, V);
+    px(ctx, 6, 4, W); px(ctx, 9, 4, W); px(ctx, 7, 6, W);
+    rect(ctx, 2, 9, 6, 6, P); rect(ctx, 8, 9, 6, 6, P);
+    rect(ctx, 2, 14, 6, 1, V); rect(ctx, 8, 14, 6, 1, V);
+    px(ctx, 4, 11, W); px(ctx, 10, 11, W); px(ctx, 12, 13, W);
+  }
+}
 
 function buildAllTextures(scene) {
   buildChar(scene, 'warrior', drawWarrior, 32, 48);
@@ -670,6 +703,11 @@ function buildAllTextures(scene) {
   }
   if (!scene.textures.exists('spark')) {
     const sp = mkCanvas(12, 12); drawSparkTex(sp.getContext('2d')); scene.textures.addCanvas('spark', sp);
+  }
+  for (const r of RELICS) { // M4：遗物小图标 16x16
+    if (!scene.textures.exists(r.tex)) {
+      const cv = mkCanvas(16, 16); drawRelicTex(cv.getContext('2d'), r.id); scene.textures.addCanvas(r.tex, cv);
+    }
   }
 }
 
@@ -740,13 +778,26 @@ const ENCHANTS = {
 };
 const ENCHANT_TINT = { fire: 0xd97b3f, frost: 0x6fb7d9, freeze: 0x9fd8ef, storm: 0xe3cf9e, vamp: 0xa83232, crit: 0xc9a227, swift: 0x3fae6a, split: 0x8b3fd9 };
 
+/* ---------------- 骰子遗物表（M4：只改掷骰，不动战斗数值；每种每局限购一次） ---------------- */
+const RELICS = [
+  { id: 'crown',  name: '旧王冠',   cost: 6, color: '#c9a227', tex: 'relic_crown',  desc: '阵容中数量最多的职业，掷骰出现概率 +15%' },
+  { id: 'bell',   name: '扭曲之铃', cost: 6, color: '#d97b3f', tex: 'relic_bell',   desc: '每波第一次掷骰未中，免费再摇一次' },
+  { id: 'mirror', name: '共鸣镜',   cost: 5, color: '#6fb7d9', tex: 'relic_mirror', desc: '掷骰未中时，预见下一摇第一颗骰子的面' },
+  { id: 'golden', name: '金骰子',   cost: 5, color: '#e3cf9e', tex: 'relic_golden', desc: '掷骰未中，返还 2 金' },
+  { id: 'beads',  name: '连珠',     cost: 7, color: '#3fae6a', tex: 'relic_beads',  desc: '掷出对子时，50% 概率额外获得一个同职业白棋子' },
+  { id: 'fate',   name: '三生骰',   cost: 8, color: '#8b3fd9', tex: 'relic_fate',   desc: '每次掷骰，10% 概率直接出三同' }
+];
+function relicById(id) { return RELICS.find(r => r.id === id); }
+function hasRelic(id) { return G.relics.includes(id); }
+
 const G = {
   phase: 'prep', wave: 1, gold: 8, level: 1, xp: 0, xpNeed: 2,
   towerHp: 100, towerMax: 100, baseGold: 7, interestCap: 8, rerolls: 0,
   speedMul: 1, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
   field: [], bench: [null, null, null, null, null], shop: [], shopEnch: null, enchHeld: null, freeReroll: 0, enemies: [],
   hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false,
-  rested: false, freeDice: true, fallen: []
+  rested: false, freeDice: true, fallen: [],
+  relics: [], bellUsed: false, previewFace: null // M4：已购遗物 / 本波铃已触发 / 共鸣镜预见（瞬态，不存档）
 };
 
 let UID = 1;
@@ -1074,6 +1125,9 @@ Object.assign(GameScene.prototype, {
     }
     this.ui.diceBtn = this.mkBtn(212, 552, 80, 44, '掷骰 3金', () => this.rollDice(), 14);
     this.ui.diceTxt = this.add.text(30, 636, '', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
+    // ---- M4：遗物图标栏（掷骰区左下角，28×28 横排，点开看详情） ----
+    this.ui.relicRow = this.add.container(0, 0).setDepth(2);
+    this.renderRelicRow();
     // ---- 开包 ----
     this.mkBtn(320, 520, 120, 64, '开包 5金', () => this.openPack(), 18);
     this.ui.packPityTxt = this.add.text(320, 600, '保底 0/30', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
@@ -1167,6 +1221,32 @@ Object.assign(GameScene.prototype, {
       hex._cards.push({ border, bg, tier, name, desc });
     }
     this.ui.hexBox = hex;
+    // 遗物铺（第 2/4 波胜利后：3 张遗物卡，可买多张，点返回进下一波）
+    const rl = this.add.container(0, 0).setDepth(40).setVisible(false);
+    rl.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0));
+    rl.add(this.add.text(GW / 2, 150, '遗物铺 · 骰子遗物', { fontSize: '30px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5));
+    rl.add(this.add.text(GW / 2, 190, '点一张卡购买（每种限购一次），买完点返回进下一波', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace' }).setOrigin(0.5));
+    rl._cards = [];
+    for (let i = 0; i < 3; i++) {
+      const x = 290 + i * 250;
+      const border = this.add.rectangle(x, 230, 220, 280, 0xc9a227).setOrigin(0, 0);
+      const bg = this.add.rectangle(x + 3, 233, 214, 274, 0x14101c).setOrigin(0, 0).setInteractive();
+      const icon = this.add.image(x + 110, 292, 'relic_crown').setScale(2).setDepth(1);
+      const name = this.add.text(x + 110, 322, '', { fontSize: '22px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0);
+      const price = this.add.text(x + 110, 356, '', { fontSize: '16px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0);
+      const desc = this.add.text(x + 110, 392, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 180 }, align: 'center' }).setOrigin(0.5, 0);
+      const sold = this.add.text(x + 110, 440, '已购', { fontSize: '18px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0).setVisible(false);
+      bg.on('pointerdown', () => this.buyRelic(i));
+      rl.add([border, bg, icon, name, price, desc, sold]);
+      rl._cards.push({ border, bg, icon, name, price, desc, sold, els: [border, bg, icon, name, price, desc, sold] });
+    }
+    const rlBackBg = this.add.rectangle(GW / 2, 560, 200, 48, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
+    const rlBackTxt = this.add.text(GW / 2, 560, '返回', { fontSize: '20px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    rlBackBg.on('pointerover', () => rlBackBg.setFillStyle(0x5b5470));
+    rlBackBg.on('pointerout', () => rlBackBg.setFillStyle(0x3a3348));
+    rlBackBg.on('pointerdown', () => { SFX.click(); this.closeRelicShop(); });
+    rl.add([rlBackBg, rlBackTxt]);
+    this.ui.relicBox = rl;
     // 强化面板（单击棋子弹出：属性 + 强化按钮，仅备战阶段）
     const rf = this.add.container(0, 0).setDepth(45).setVisible(false);
     const rfBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
@@ -1201,6 +1281,21 @@ Object.assign(GameScene.prototype, {
     rs.add([rs._title, rs._status, rsBtnBg, rsBtnTxt, rsCloseBg, rsCloseTxt]);
     rs._btnBg = rsBtnBg; rs._btnTxt = rsBtnTxt;
     this.ui.restBox = rs;
+    // 遗物详情（点底部图标栏弹出：名字 + 效果 + 状态，紧凑框）
+    const rd = this.add.container(0, 0).setDepth(46).setVisible(false);
+    const rdBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
+    rdBg.on('pointerdown', () => rd.setVisible(false));
+    const rdPanel = this.add.rectangle(GW / 2, GH / 2, 360, 240, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
+    rd.add([rdBg, rdPanel]);
+    rd._title = this.add.text(GW / 2, 268, '', { fontSize: '22px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    rd._icon = this.add.image(GW / 2, 300, 'relic_crown').setScale(2);
+    rd._desc = this.add.text(GW / 2, 336, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 300 }, align: 'center' }).setOrigin(0.5, 0);
+    rd._status = this.add.text(GW / 2, 400, '', { fontSize: '13px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
+    const rdCloseBg = this.add.rectangle(GW / 2, 448, 120, 36, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const rdCloseTxt = this.add.text(GW / 2, 448, '关闭', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5);
+    rdCloseBg.on('pointerdown', () => { SFX.click(); rd.setVisible(false); });
+    rd.add([rd._title, rd._icon, rd._desc, rd._status, rdCloseBg, rdCloseTxt]);
+    this.ui.relicDetail = rd;
     // 开包揭示弹层
     const rev = this.add.container(0, 0).setDepth(40).setVisible(false);
     rev.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0));
@@ -1352,11 +1447,15 @@ Object.assign(GameScene.prototype, {
       field: [], bench: [null, null, null, null, null], shop: [], shopEnch: null, enchHeld: null, freeReroll: 0, enemies: [],
       hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false,
       rested: false, freeDice: true, fallen: [],
+      relics: [], bellUsed: false, previewFace: null, // M4
       stats: { startTime: Date.now(), kills: 0, goldEarned: 0 }
     });
+    this._diceLock = null; this._bellFree = false; this._previewUsed = false; // M4 骰子瞬态
     this.ui.speedTxt.setText(SETTINGS.speed + 'x');
     this.ui.endBox.setVisible(false);
     this.ui.hexBox.setVisible(false);
+    this.ui.relicBox.setVisible(false);
+    this.ui.relicDetail.setVisible(false);
     this.ui.revealBox.setVisible(false);
     this.ui.reinforceBox.setVisible(false);
     this.ui.pauseOverlay.setVisible(false);
@@ -1369,6 +1468,7 @@ Object.assign(GameScene.prototype, {
     this.addToBench(makeUnit('archer', 'N', 'player'));
     this.refreshShop(true);
     this.renderEnchBar();
+    this.renderRelicRow();
     this.updateTop();
     this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
     this.ui.restBtn.setVisible(true); this.ui.restTxt.setVisible(true);
@@ -1734,6 +1834,38 @@ Object.assign(GameScene.prototype, {
       bar.label.setText('附魔栏（空）').setColor('#8a84a0');
     }
   },
+
+  /* ---------- M4：遗物图标栏 + 详情 ---------- */
+  renderRelicRow() { // 底部图标栏：按 G.relics 顺序重画，28×28 横排
+    const row = this.ui.relicRow;
+    if (!row) return;
+    row.removeAll(true);
+    G.relics.forEach((id, i) => {
+      const r = relicById(id);
+      if (!r) return;
+      const cx = 30 + i * 34 + 14, cy = 656 + 14;
+      const tile = this.add.rectangle(cx, cy, 28, 28, 0x14101c).setStrokeStyle(1, 0x3a3348);
+      const img = this.add.image(cx, cy, r.tex).setScale(1.75).setInteractive();
+      img._relicId = id;
+      img.on('pointerdown', () => this.showRelicDetail(id));
+      row.add([tile, img]);
+    });
+  },
+  showRelicDetail(id) {
+    const r = relicById(id);
+    if (!r) return;
+    const d = this.ui.relicDetail;
+    d._icon.setTexture(r.tex);
+    d._title.setText(r.name);
+    d._desc.setText(r.desc);
+    let st = '已拥有';
+    if (id === 'crown') st = '当前加成：' + CLASSES[this.crownClass()].name + '（阵容中数量最多）';
+    else if (id === 'bell') st = G.bellUsed ? '本波已触发' : '本波未触发';
+    else if (id === 'mirror') st = G.previewFace ? '已预见：下一摇首颗是' + CLASSES[G.previewFace].name : '未中时预见下一摇';
+    d._status.setText(st);
+    d.setVisible(true);
+    SFX.click();
+  },
   applyEnchant(target, enchId) {
     if (enchId === 'split' && target.cls === 'warrior') {
       this.floatText(target.x, target.y - 46, '分裂只能给弓手/术士', '#ff8888', 13);
@@ -1876,28 +2008,55 @@ Object.assign(GameScene.prototype, {
     }
   },
 
+  /* ---------- M4：骰子遗物 ---------- */
+  crownClass() { // 阵容中数量最多的职业；平局按 战士 > 弓手 > 术士
+    const n = { warrior: 0, archer: 0, mage: 0 };
+    for (const u of [...G.field, ...G.bench]) if (u) n[u.cls] = (n[u.cls] || 0) + 1;
+    let best = 'warrior';
+    if (n.archer > n[best]) best = 'archer';
+    if (n.mage > n[best]) best = 'mage';
+    return best;
+  },
+  pickDiceFace(di) { // 单颗骰子的面：三生骰锁定 > 共鸣镜预见首颗 > 旧王冠加权 > 均分
+    const keys = ['warrior', 'archer', 'mage'];
+    if (this._diceLock) return this._diceLock;
+    if (di === 0 && G.previewFace) return G.previewFace;
+    if (hasRelic('crown')) {
+      const fav = this.crownClass();
+      const r = Math.random();
+      if (r < 0.48) return fav;
+      const others = keys.filter(k => k !== fav);
+      return r < 0.74 ? others[0] : others[1];
+    }
+    return keys[Math.floor(Math.random() * 3)];
+  },
   /* ---------- 掷骰召唤（三颗骰子） ---------- */
   rollDice() {
     if (G.phase !== 'prep' || G.diceBusy) return;
     if (G.freeDice) { G.freeDice = false; } // 每波第一次免费
+    else if (this._bellFree) { this._bellFree = false; } // 扭曲之铃：免费再摇
     else {
       if (G.gold < 3) { this.ui.diceTxt.setText('金币不足'); return; }
       G.gold -= 3;
     }
     G.diceBusy = true; SFX.pack();
     this.updateTop();
-    const keys = ['warrior', 'archer', 'mage'];
+    // M4 三生骰：10% 直接三同（整摇锁定一个随机职业）；共鸣镜预见本摇首颗
+    this._diceLock = (hasRelic('fate') && Math.random() < 0.10)
+      ? ['warrior', 'archer', 'mage'][Math.floor(Math.random() * 3)] : null;
+    this._previewUsed = !!G.previewFace;
+    if (this._diceLock) this.floatText(GW / 2, 200, '三生骰！', '#8b3fd9', 20);
     let ticks = 0;
     this.time.addEvent({
       delay: 90, repeat: 5, callback: () => {
         ticks++;
         SFX.click();
-        for (const die of this.dice) {
-          const k = keys[Math.floor(Math.random() * 3)];
+        this.dice.forEach((die, di) => {
+          const k = this.pickDiceFace(di);
           die._cls = k; die._img.setTexture(k + '_idle0');
           die.setAngle(Math.random() * 24 - 12);
           die.y = 578 + (Math.random() * 8 - 4);
-        }
+        });
         if (ticks >= 6) this.resolveDice();
       }
     });
@@ -1906,6 +2065,10 @@ Object.assign(GameScene.prototype, {
     G.diceBusy = false;
     for (const die of this.dice) { die.setAngle(0); die.y = 578; }
     const cls = this.dice.map(d => d._cls);
+    const wasLock = this._diceLock; // 三生骰本摇是否锁定
+    this._diceLock = null;
+    if (this._previewUsed) G.previewFace = null; // 上一摇的预见已用完（铃重摇前新设的不受影响）
+    this._previewUsed = false;
     const got = [];
     const summon = (c, rarity) => {
       const u = makeUnit(c, rarity, 'player');
@@ -1913,15 +2076,37 @@ Object.assign(GameScene.prototype, {
     };
     if (cls[0] === cls[1] && cls[1] === cls[2]) {
       summon(cls[0], 'R'); summon(cls[0], 'N');
-      if (got.length) { SFX.win(); SFX.hexGold(); this.ui.diceTxt.setText('三同！' + got[0] + '×2 入队'); }
+      if (got.length) { SFX.win(); SFX.hexGold(); this.ui.diceTxt.setText('三同！' + got[0] + '×2 入队' + (wasLock ? '（三生骰）' : '')); }
       else this.ui.diceTxt.setText('三同！但备战席满了');
     } else if (cls[0] === cls[1] || cls[1] === cls[2] || cls[0] === cls[2]) {
       const pair = cls[0] === cls[1] ? cls[0] : cls[2];
       summon(pair, 'N');
       if (got.length) { SFX.win(); this.ui.diceTxt.setText('对子！' + got[0] + ' 入队'); }
       else this.ui.diceTxt.setText('对子！但备战席满了');
+      // M4 连珠：对子 50% 额外一个同职业白棋子
+      if (hasRelic('beads') && Math.random() < 0.5) {
+        const before = got.length;
+        summon(pair, 'N');
+        if (got.length > before) this.floatText(GW / 2, 200, '连珠！额外' + CLASSES[pair].name + '入队', '#3fae6a', 16);
+        else this.floatText(GW / 2, 200, '连珠触发，但备战席满了', '#ff8888', 14);
+      }
     } else {
-      this.ui.diceTxt.setText('没中，再来！');
+      // M4 未中挂钩：金骰子返还 / 共鸣镜预见 / 扭曲之铃免费再摇
+      let msg = '没中，再来！';
+      if (hasRelic('golden')) { G.gold += 2; msg += ' 金骰子返还 2金'; }
+      if (hasRelic('mirror')) {
+        G.previewFace = ['warrior', 'archer', 'mage'][Math.floor(Math.random() * 3)];
+        msg += ' 共鸣镜预见：下一摇首颗是' + CLASSES[G.previewFace].name;
+      }
+      this.ui.diceTxt.setText(msg);
+      if (hasRelic('bell') && !G.bellUsed) {
+        G.bellUsed = true;
+        this.floatText(GW / 2, 200, '扭曲之铃：免费再摇一次', '#d97b3f', 16);
+        this._bellFree = true;
+        this.updateTop();
+        this.rollDice();
+        return;
+      }
     }
     this.updateTop();
   },
@@ -1991,15 +2176,51 @@ Object.assign(GameScene.prototype, {
     this.ui.hexBox.setVisible(false);
     this.floatText(GW / 2, 200, '获得海克斯：' + h.name, TIER_COLOR[h.tier], 20);
     for (const u of [...G.field, ...G.bench]) if (u) { recompute(u); if (u.sprite) u.sprite.setScale(this.unitScale(u)); }
-    G.wave += 1; G.rerolls = 0;
-    G.freeDice = true; G.rested = false; // 新一波：免费骰子回满，本波休整次数重置
-    if (G.buffs.ddFree) G.freeReroll = 1; // DD街区：新一波一次免费刷新
-    this.refreshShop();
-    G.phase = 'prep';
-    this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
-    this.ui.restBtn.setVisible(true); this.ui.restTxt.setVisible(true);
-    this.saveGame();
+    this.advanceWave();
+  },
+
+  /* ---------- M4：遗物铺 ---------- */
+  showRelicShop() { // 第 2/4 波胜利后：从未拥有遗物里抽 3 张；没有了返回 false（直接推进）
+    const avail = RELICS.filter(r => !G.relics.includes(r.id));
+    if (!avail.length) return false;
+    const choices = [...avail].sort(() => Math.random() - 0.5).slice(0, 3);
+    this._relicChoices = choices;
+    this.ui.relicBox._cards.forEach((c, i) => {
+      const r = choices[i];
+      c.els.forEach(o => o.setVisible(!!r));
+      if (!r) return;
+      c.icon.setTexture(r.tex);
+      c.name.setText(r.name);
+      c.price.setText(r.cost + '金').setColor('#e3cf9e');
+      c.desc.setText(r.desc);
+      c.sold.setVisible(false);
+      c.bg.setAlpha(1);
+    });
+    this.ui.relicBox.setVisible(true);
+    SFX.hexGold();
+    return true;
+  },
+  buyRelic(i) {
+    const r = this._relicChoices && this._relicChoices[i];
+    if (!r) return;
+    const c = this.ui.relicBox._cards[i];
+    if (G.relics.includes(r.id)) return;
+    if (G.gold < r.cost) {
+      c.price.setColor('#ff8888');
+      this.floatText(GW / 2, 200, '金币不足', '#ff8888', 16);
+      return;
+    }
+    G.gold -= r.cost;
+    G.relics.push(r.id);
+    SFX.hexGold();
+    c.sold.setVisible(true);
+    c.bg.setAlpha(0.45);
+    this.renderRelicRow();
     this.updateTop();
+  },
+  closeRelicShop() {
+    this.ui.relicBox.setVisible(false);
+    this.advanceWave();
   }
 });
 
@@ -2437,6 +2658,18 @@ Object.assign(GameScene.prototype, {
       }
     }
   },
+  advanceWave() { // 新一波推进（endWave / pickHex / closeRelicShop 三处共用）
+    G.wave += 1; G.rerolls = 0;
+    G.freeDice = true; G.rested = false; // 新一波：免费骰子回满，本波休整次数重置
+    G.bellUsed = false; G.previewFace = null; // M4：铃与预见过波清空
+    if (G.buffs.ddFree) G.freeReroll = 1; // DD街区：新一波一次免费刷新
+    this.refreshShop();
+    G.phase = 'prep';
+    this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
+    this.ui.restBtn.setVisible(true); this.ui.restTxt.setVisible(true);
+    this.saveGame();
+    this.updateTop();
+  },
   endWave(win) {
     if (G.phase !== 'battle') return;
     G.phase = 'settle';
@@ -2454,15 +2687,8 @@ Object.assign(GameScene.prototype, {
     if (G.wave === 5) { this.time.delayedCall(1200, () => this.gameOver(true)); return; }
     this.time.delayedCall(1200, () => {
       if (G.phase !== 'settle') return;
-      G.wave += 1; G.rerolls = 0;
-      G.freeDice = true; G.rested = false; // 新一波：免费骰子回满，本波休整次数重置
-      if (G.buffs.ddFree) G.freeReroll = 1; // DD街区：新一波一次免费刷新
-      this.refreshShop();
-      G.phase = 'prep';
-      this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
-      this.ui.restBtn.setVisible(true); this.ui.restTxt.setVisible(true);
-      this.saveGame();
-      this.updateTop();
+      if ((G.wave === 2 || G.wave === 4) && this.showRelicShop()) return; // 有遗物可买就弹铺，否则直接推进
+      this.advanceWave();
     });
   },
   gameOver(win) {
@@ -2519,6 +2745,7 @@ Object.assign(GameScene.prototype, {
       towerHp: G.towerHp, buffs: G.buffs, hexesTaken: G.hexesTaken, packPity: G.packPity,
       field: G.field.map(u => snapUnit(u)), bench: G.bench.map(u => u ? snapUnit(u) : null),
       fallen: G.fallen.map(u => snapUnit(u)), rested: G.rested || false, freeDice: !!G.freeDice,
+      relics: [...G.relics], bellUsed: !!G.bellUsed, // M4（previewFace 是瞬态，不进存档）
       shop: G.shop, enchHeld: G.enchHeld || null, shopEnch: G.shopEnch || null, freeReroll: G.freeReroll || 0
     };
     try { localStorage.setItem('syjt_save_v1', JSON.stringify(snap)); } catch (e) {}
@@ -2534,7 +2761,8 @@ Object.assign(GameScene.prototype, {
     Object.assign(G, {
       wave: snap.wave, gold: snap.gold, level: snap.level, xp: snap.xp, xpNeed: snap.xpNeed,
       towerHp: snap.towerHp, buffs: snap.buffs || {}, hexesTaken: snap.hexesTaken || [], packPity: snap.packPity || 0,
-      rested: snap.rested || false, freeDice: snap.freeDice !== undefined ? !!snap.freeDice : true
+      rested: snap.rested || false, freeDice: snap.freeDice !== undefined ? !!snap.freeDice : true,
+      relics: snap.relics || [], bellUsed: !!snap.bellUsed // M4（previewFace 不进存档，读档时清空——resetGame 已置 null）
     });
     G.shop = snap.shop && snap.shop.length ? snap.shop : G.shop;
     G.enchHeld = snap.enchHeld || null;
@@ -2570,6 +2798,7 @@ Object.assign(GameScene.prototype, {
     });
     this.renderShop();
     this.renderEnchBar();
+    this.renderRelicRow();
     this.updateTop();
   }
 });
@@ -2604,7 +2833,7 @@ class MenuScene extends Phaser.Scene {
     menuBtn(this, GW / 2, 460, 260, 52, '玩法说明', () => this._howto.setVisible(true), 22);
     menuBtn(this, GW / 2, 530, 260, 52, '设置', () => this._settings.setVisible(true), 22);
     this.add.text(GW / 2, 600, best > 0 ? '最高波次：第 ' + best + ' 波 / 5' : '最高波次：—', { fontSize: '16px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
-    this.add.text(GW - 16, GH - 16, 'v0.4', { fontSize: '14px', color: '#5b5470', fontFamily: 'monospace' }).setOrigin(1, 1);
+    this.add.text(GW - 16, GH - 16, 'v0.5', { fontSize: '14px', color: '#5b5470', fontFamily: 'monospace' }).setOrigin(1, 1);
     this._settings = createSettingsOverlay(this, 60);
     this._howto = createHowToOverlay(this, 60);
     this.input.on('pointerdown', () => SFX.ac());
