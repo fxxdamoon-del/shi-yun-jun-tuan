@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>噬运军团 · v0.3</title>
+<title>噬运军团 · v0.4</title>
 <link rel="icon" href="data:,">
 <style>
   html, body { margin: 0; padding: 0; background: #0b0910; height: 100%; overflow: hidden; }
@@ -20,7 +20,7 @@
 <script>
 'use strict';
 /* ============================================================
-   噬运军团 · v0.3（M2：附魔 + 强化 + 海克斯扩充）
+   噬运军团 · v0.4（M3：经济加钱 + 撤退/休整 + 免费骰子 + 飞身踢重做）
    Phaser 4.2.1（jsdelivr CDN，唯一外部资源）
    所有美术：代码在 canvas 上逐像素画的精灵（48x48，Boss 64x64，12 帧/角色）
    音效：WebAudio 合成 SFX + 循环 BGM，无外部音频
@@ -719,7 +719,7 @@ const HEX_POOL = [
   { id: 'dd',         name: 'DD街区',   tier: 'blue',   desc: '每波免费刷新一次商店', apply: s => { s.buffs.ddFree = true; } },
   { id: 'ticket',     name: '黄金门票', tier: 'gold',   desc: '每次刷新商店25%概率不花钱', apply: s => { s.buffs.goldenTicket = true; } },
   { id: 'pearl',      name: '珠光莲花', tier: 'gold',   desc: '全队暴击伤害2倍→2.5倍', apply: s => { s.buffs.pearl = true; } },
-  { id: 'execute',    name: '飞身踢',   tier: 'gold',   desc: '攻击直接处决生命低于15%的敌人', apply: s => { s.buffs.execute = true; } },
+  { id: 'execute',    name: '飞身踢',   tier: 'gold',   desc: '攻击处决生命低于15%的敌人（需自身最大生命 ≥ 目标最大生命）', apply: s => { s.buffs.execute = true; } },
   { id: 'soul',       name: '吞噬灵魂', tier: 'blue',   desc: '每击杀一个敌人，全队生命+2（本局叠加）', apply: s => { s.buffs.soul = true; } },
   { id: 'speeddemon', name: '速度恶魔', tier: 'blue',   desc: '造成伤害后移速+20%，持续2秒', apply: s => { s.buffs.speedDemon = true; } },
   { id: 'bounce',     name: '弹跳',     tier: 'purple', desc: '远程攻击命中后弹跳到附近敌人，造成40%伤害', apply: s => { s.buffs.bounce = true; } }
@@ -742,10 +742,11 @@ const ENCHANT_TINT = { fire: 0xd97b3f, frost: 0x6fb7d9, freeze: 0x9fd8ef, storm:
 
 const G = {
   phase: 'prep', wave: 1, gold: 8, level: 1, xp: 0, xpNeed: 2,
-  towerHp: 100, towerMax: 100, baseGold: 5, interestCap: 5, rerolls: 0,
+  towerHp: 100, towerMax: 100, baseGold: 7, interestCap: 8, rerolls: 0,
   speedMul: 1, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
   field: [], bench: [null, null, null, null, null], shop: [], shopEnch: null, enchHeld: null, freeReroll: 0, enemies: [],
-  hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false
+  hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false,
+  rested: false, freeDice: true, fallen: []
 };
 
 let UID = 1;
@@ -827,13 +828,16 @@ function cellAt(x, y) {
 
 /* ---------------- 存档快照（继续 = 恢复本局，非继承金币） ---------------- */
 function snapUnit(u) {
-  return { cls: u.cls, rarity: u.rarity, star: u.star, starProg: u.starProg, level: u.level, xp: u.xp, devourCount: u.devourCount, cell: u.cell, ench: u.ench || null, reinforce: u.reinforce || 0, soulBonus: u.soulBonus || 0 };
+  return { cls: u.cls, rarity: u.rarity, star: u.star, starProg: u.starProg, level: u.level, xp: u.xp, devourCount: u.devourCount, cell: u.cell, ench: u.ench || null, reinforce: u.reinforce || 0, soulBonus: u.soulBonus || 0, hp: u.hp, alive: u.alive !== false };
 }
 function restoreUnit(s) {
   const u = makeUnit(s.cls, s.rarity, 'player');
   u.star = s.star; u.starProg = s.starProg || 0; u.level = s.level; u.xp = s.xp || 0; u.devourCount = s.devourCount || 0;
   u.ench = s.ench || null; u.reinforce = s.reinforce || 0; u.soulBonus = s.soulBonus || 0;
   recompute(u);
+  // 读档恢复真实血量（休整复活到 50% 血、残血都不许读档变满血）；旧存档没 hp 字段按满血处理
+  if (s.hp !== undefined) u.hp = Math.max(0, Math.min(u.maxHp, Math.round(s.hp)));
+  if (s.alive === false) u.alive = false;
   return u;
 }
 
@@ -1052,7 +1056,7 @@ Object.assign(GameScene.prototype, {
     this.add.rectangle(460, 496, 300, 176, 0x241f30).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
     this.add.rectangle(760, 496, 520, 176, 0x241f30).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
     // ---- 左：掷骰召唤 ----
-    this.add.text(30, 512, '掷骰 · 3金', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' });
+    this.ui.diceLbl = this.add.text(30, 512, '掷骰 · 3金', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' });
     this.dice = [];
     const diceKeys = ['warrior', 'archer', 'mage'];
     for (let i = 0; i < 3; i++) {
@@ -1068,7 +1072,7 @@ Object.assign(GameScene.prototype, {
       die._cls = k;
       this.dice.push(die);
     }
-    this.mkBtn(212, 552, 80, 44, '掷骰 3金', () => this.rollDice(), 14);
+    this.ui.diceBtn = this.mkBtn(212, 552, 80, 44, '掷骰 3金', () => this.rollDice(), 14);
     this.ui.diceTxt = this.add.text(30, 636, '', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
     // ---- 开包 ----
     this.mkBtn(320, 520, 120, 64, '开包 5金', () => this.openPack(), 18);
@@ -1077,6 +1081,9 @@ Object.assign(GameScene.prototype, {
     this.ui.waveInfo = this.add.text(470, 506, '', { fontSize: '15px', color: '#f2ead8', fontFamily: 'monospace' });
     const st = this.mkBtn(520, 540, 180, 60, '开始战斗', () => this.startBattle(), 22);
     this.ui.startBtn = st.bg; this.ui.startTxt = st.txt;
+    // 撤退按钮（开始战斗旁边，竖条，不压商店/备战席）
+    const rb = this.mkBtn(706, 540, 48, 60, '撤退', () => this.openRest(), 14);
+    this.ui.restBtn = rb.bg; this.ui.restTxt = rb.txt;
     this.add.text(470, 624, '备战席（拖上场 / 拖到场上棋子身上 = 吞噬）', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
     this.benchSlots = [];
     for (let i = 0; i < 5; i++) {
@@ -1177,6 +1184,23 @@ Object.assign(GameScene.prototype, {
     rf.add([rf._title, rf._stats, rfBtnBg, rfBtnTxt, rfCloseBg, rfCloseTxt]);
     rf._btnBg = rfBtnBg; rf._btnTxt = rfBtnTxt;
     this.ui.reinforceBox = rf;
+    // 休整面板（撤退休整：回血 + 复活 + 修塔，每波备战限一次）
+    const rs = this.add.container(0, 0).setDepth(45).setVisible(false);
+    const rsBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
+    rsBg.on('pointerdown', () => rs.setVisible(false));
+    const rsPanel = this.add.rectangle(GW / 2, GH / 2, 440, 380, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
+    rs.add([rsBg, rsPanel]);
+    rs._title = this.add.text(GW / 2, 210, '撤退休整', { fontSize: '22px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    rs._status = this.add.text(GW / 2, 250, '', { fontSize: '16px', color: '#cfc9dd', fontFamily: 'monospace', align: 'center', lineSpacing: 10 }).setOrigin(0.5, 0);
+    const rsBtnBg = this.add.rectangle(GW / 2, 470, 260, 48, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
+    const rsBtnTxt = this.add.text(GW / 2, 470, '休整 3金', { fontSize: '18px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    rsBtnBg.on('pointerdown', () => this.doRest());
+    const rsCloseBg = this.add.rectangle(GW / 2, 540, 120, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const rsCloseTxt = this.add.text(GW / 2, 540, '关闭', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5);
+    rsCloseBg.on('pointerdown', () => { SFX.click(); rs.setVisible(false); });
+    rs.add([rs._title, rs._status, rsBtnBg, rsBtnTxt, rsCloseBg, rsCloseTxt]);
+    rs._btnBg = rsBtnBg; rs._btnTxt = rsBtnTxt;
+    this.ui.restBox = rs;
     // 开包揭示弹层
     const rev = this.add.container(0, 0).setDepth(40).setVisible(false);
     rev.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0));
@@ -1215,6 +1239,16 @@ Object.assign(GameScene.prototype, {
     this.ui.xpFg.width = Math.max(0, 120 * G.xp / G.xpNeed);
     this.ui.lvlTxt.setText('Lv' + G.level);
     this.ui.rerollBtn.txt.setText(G.freeReroll > 0 ? '免费刷新' : '刷新 ' + (2 + G.rerolls) + '金');
+    // 掷骰按钮文案：每波第一次免费
+    if (this.ui.diceBtn) this.ui.diceBtn.txt.setText(G.freeDice ? '掷骰 免费' : '掷骰 3金');
+    if (this.ui.diceLbl) this.ui.diceLbl.setText(G.freeDice ? '掷骰 · 免费' : '掷骰 · 3金');
+    // 撤退按钮状态：备战阶段才可用，第 1 波 / 已休整 / 金币不足时置灰
+    if (this.ui.restBtn) {
+      const canRest = G.phase === 'prep' && G.wave > 1 && !G.rested && G.gold >= 3;
+      this.ui.restBtn.setFillStyle(canRest ? 0x3a3348 : 0x5b5470);
+      this.ui.restBtn.setAlpha(canRest ? 1 : 0.6);
+      this.ui.restTxt.setAlpha(canRest ? 1 : 0.6);
+    }
     this.ui.packPityTxt.setText('保底 ' + G.packPity + '/30');
     // 波次进度条
     const prog = ((G.wave - 1) + (G.phase === 'battle' ? 0.5 : 0)) / 5;
@@ -1310,13 +1344,14 @@ Object.assign(GameScene.prototype, {
   /* ---------- 开局 ---------- */
   resetGame() {
     // 清掉旧单位
-    for (const u of [...G.field, ...G.bench, ...G.enemies]) if (u) this.destroyUnitVisual(u);
+    for (const u of [...G.field, ...G.bench, ...G.fallen, ...G.enemies]) if (u) this.destroyUnitVisual(u);
     Object.assign(G, {
       phase: 'prep', wave: 1, gold: 8, level: 1, xp: 0, xpNeed: 2,
-      towerHp: 100, baseGold: 5, interestCap: 5, rerolls: 0,
+      towerHp: 100, baseGold: 7, interestCap: 8, rerolls: 0,
       speedMul: SETTINGS.speed, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
       field: [], bench: [null, null, null, null, null], shop: [], shopEnch: null, enchHeld: null, freeReroll: 0, enemies: [],
       hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false,
+      rested: false, freeDice: true, fallen: [],
       stats: { startTime: Date.now(), kills: 0, goldEarned: 0 }
     });
     this.ui.speedTxt.setText(SETTINGS.speed + 'x');
@@ -1336,6 +1371,7 @@ Object.assign(GameScene.prototype, {
     this.renderEnchBar();
     this.updateTop();
     this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
+    this.ui.restBtn.setVisible(true); this.ui.restTxt.setVisible(true);
     this.ui.startTxt.setText('开始战斗');
   },
   addToBench(u) {
@@ -1749,6 +1785,81 @@ Object.assign(GameScene.prototype, {
     this.refreshReinforcePanel();
     this.updateTop();
   },
+  /* ---------- M3：撤退 / 休整 ---------- */
+  openRest() {
+    if (G.phase !== 'prep' || G.paused) return;
+    this.refreshRestPanel();
+    this.ui.restBox.setVisible(true);
+  },
+  refreshRestPanel() {
+    const rs = this.ui.restBox;
+    if (!rs) return;
+    const alive = [...G.field, ...G.bench].filter(u => u && u.alive).length;
+    const wounded = [...G.field, ...G.bench].filter(u => u && u.alive && u.hp < u.maxHp).length;
+    const dead = G.fallen.length;
+    rs._status.setText(
+      '存活棋子 ' + alive + ' 个　残血 ' + wounded + ' 个　阵亡 ' + dead + ' 个\n' +
+      '水晶塔 ' + G.towerHp + '/' + G.towerMax + '\n' +
+      '休整：全队回满血，阵亡棋子复活到 50% 生命\n' +
+      '水晶塔 +25 血（每波备战限一次）');
+    let reason = '';
+    if (G.wave <= 1) reason = '第 1 波无需休整';
+    else if (G.rested) reason = '本波已休整过';
+    else if (G.gold < 3) reason = '金币不足（需 3 金）';
+    const can = !reason;
+    rs._btnBg.setFillStyle(can ? 0x3a3348 : 0x5b5470);
+    rs._btnBg.setAlpha(can ? 1 : 0.6);
+    rs._btnTxt.setText(reason || '休整 3金');
+    rs._btnTxt.setAlpha(can ? 1 : 0.6);
+  },
+  doRest() {
+    if (G.phase !== 'prep' || G.paused) return;
+    if (G.wave <= 1) { this.floatText(GW / 2, 200, '第 1 波无需休整', '#ff8888', 14); return; }
+    if (G.rested) { this.floatText(GW / 2, 200, '本波已休整过', '#ff8888', 14); return; }
+    if (G.gold < 3) { this.floatText(GW / 2, 200, '金币不足', '#ff8888', 14); return; }
+    G.gold -= 3;
+    G.rested = true;
+    // 全队回满血
+    for (const u of [...G.field, ...G.bench]) {
+      if (!u || !u.alive) continue;
+      u.hp = u.maxHp; u.frozenUntil = 0; u.burnUntil = 0; u.slowUntil = 0;
+      this.syncUnitVisual(u); this.syncHpBar(u);
+    }
+    // 阵亡棋子从 fallen 复活到 50% 最大生命，放回原来格子（格子被占则改放备战席）
+    for (const u of [...G.fallen]) {
+      const cell = u.cell;
+      const cellFree = cell && !this.unitAtCell(cell.c, cell.r);
+      const benchFree = G.bench.indexOf(null) !== -1;
+      if (!cellFree && !benchFree) continue; // 没地方放，留在 fallen 里
+      u.alive = true;
+      u.hp = Math.max(1, Math.floor(u.maxHp * 0.5));
+      u.frozenUntil = 0; u.burnUntil = 0; u.slowUntil = 0;
+      u.target = null; u.cd = 0;
+      if (u.sprite) {
+        this.tweens.killTweensOf(u.sprite);
+        u.sprite.setVisible(true).setAlpha(1).clearTint().setTexture(u.tex + '_idle0');
+      }
+      if (cellFree) {
+        const pt = cellCenter(cell.c, cell.r);
+        u.x = pt.x; u.y = pt.y;
+        G.field.push(u);
+        if (!u.sprite) this.spawnUnitSprite(u);
+        u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
+        this.refreshStars(u); this.refreshEnchVisual(u);
+        this.syncUnitVisual(u); this.syncHpBar(u);
+      } else {
+        this.addToBench(u);
+        this.syncUnitVisual(u); this.syncHpBar(u);
+      }
+      G.fallen = G.fallen.filter(x => x !== u);
+    }
+    G.towerHp = Math.min(G.towerMax, G.towerHp + 25);
+    SFX.starup();
+    this.floatText(GW / 2, 200, '休整完毕！', '#6fb7d9', 18);
+    this.refreshRestPanel();
+    this.saveGame();
+    this.updateTop();
+  },
   buyXp() {
     if (G.phase !== 'prep') return;
     if (G.gold < 4) { this.floatText(1010, 640, '金币不足', '#ff8888', 13); return; }
@@ -1768,8 +1879,12 @@ Object.assign(GameScene.prototype, {
   /* ---------- 掷骰召唤（三颗骰子） ---------- */
   rollDice() {
     if (G.phase !== 'prep' || G.diceBusy) return;
-    if (G.gold < 3) { this.ui.diceTxt.setText('金币不足'); return; }
-    G.gold -= 3; G.diceBusy = true; SFX.pack();
+    if (G.freeDice) { G.freeDice = false; } // 每波第一次免费
+    else {
+      if (G.gold < 3) { this.ui.diceTxt.setText('金币不足'); return; }
+      G.gold -= 3;
+    }
+    G.diceBusy = true; SFX.pack();
     this.updateTop();
     const keys = ['warrior', 'archer', 'mage'];
     let ticks = 0;
@@ -1877,10 +1992,12 @@ Object.assign(GameScene.prototype, {
     this.floatText(GW / 2, 200, '获得海克斯：' + h.name, TIER_COLOR[h.tier], 20);
     for (const u of [...G.field, ...G.bench]) if (u) { recompute(u); if (u.sprite) u.sprite.setScale(this.unitScale(u)); }
     G.wave += 1; G.rerolls = 0;
+    G.freeDice = true; G.rested = false; // 新一波：免费骰子回满，本波休整次数重置
     if (G.buffs.ddFree) G.freeReroll = 1; // DD街区：新一波一次免费刷新
     this.refreshShop();
     G.phase = 'prep';
     this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
+    this.ui.restBtn.setVisible(true); this.ui.restTxt.setVisible(true);
     this.saveGame();
     this.updateTop();
   }
@@ -2145,8 +2262,8 @@ Object.assign(GameScene.prototype, {
       this.hitStop(90);
       this.starburst(def.x, def.y - 10);
     } else SFX.hit();
-    // 飞身踢：直接处决生命低于 15% 的敌人
-    if (G.buffs.execute && att.side === 'player' && def.hp > 0 && def.hp / def.maxHp < 0.15) {
+    // 飞身踢：血量压制才能处决（攻击者最大生命 ≥ 目标最大生命）
+    if (G.buffs.execute && att.side === 'player' && def.hp > 0 && def.hp / def.maxHp < 0.15 && att.maxHp >= def.maxHp) {
       def.hp = 0;
       this.floatText(def.x, def.y - 66, '处决！', '#c9a227', 20);
       this.killUnit(def);
@@ -2276,7 +2393,7 @@ Object.assign(GameScene.prototype, {
     if (u.glow) u.glow.setVisible(false);
     if (u.enchImg) u.enchImg.setVisible(false);
     if (u.sprite) this.tweens.add({ targets: u.sprite, alpha: 0, duration: 500, delay: 350, onComplete: () => { if (u.sprite) u.sprite.setVisible(false); } });
-    if (u.side === 'player') G.field = G.field.filter(x => x !== u);
+    if (u.side === 'player') { G.field = G.field.filter(x => x !== u); if (!G.fallen.includes(u)) G.fallen.push(u); }
   },
 
   /* ---------- 波次流程 ---------- */
@@ -2286,9 +2403,11 @@ Object.assign(GameScene.prototype, {
     this.saveGame(); // 开打前存档：继续时回到本波备战
     this.ui.tutBox.setVisible(false); markTutDone(); // 新手引导完成
     this.ui.reinforceBox.setVisible(false);
+    this.ui.restBox.setVisible(false);
     BGM.setMode(G.wave === 5 ? 'boss' : 'normal');
     G.phase = 'battle';
     this.ui.startBtn.setVisible(false); this.ui.startTxt.setVisible(false);
+    this.ui.restBtn.setVisible(false); this.ui.restTxt.setVisible(false);
     SFX.tone(220, 0.15, 'sawtooth', 0.10, 440);
     this.updateTop();
     this.spawnWave(G.wave);
@@ -2323,11 +2442,11 @@ Object.assign(GameScene.prototype, {
     G.phase = 'settle';
     if (!win) { this.gameOver(false); return; }
     const interest = Math.min(G.interestCap, Math.floor(G.gold / 10));
-    const gain = G.baseGold + 1 + interest;
+    const gain = G.baseGold + 2 + interest;
     G.gold += gain;
     if (G.stats) G.stats.goldEarned += gain;
     SFX.coin();
-    this.floatText(GW / 2, 200, '第 ' + G.wave + ' 波胜利！+' + gain + '金（基础' + G.baseGold + ' 胜利1 利息' + interest + '）', '#e3cf9e', 18);
+    this.floatText(GW / 2, 200, '第 ' + G.wave + ' 波胜利！+' + gain + '金（基础' + G.baseGold + ' 胜利2 利息' + interest + '）', '#e3cf9e', 18);
     if (G.wave === 3) {
       this.time.delayedCall(1200, () => { if (G.phase === 'settle') this.showHex(); });
       return;
@@ -2336,10 +2455,12 @@ Object.assign(GameScene.prototype, {
     this.time.delayedCall(1200, () => {
       if (G.phase !== 'settle') return;
       G.wave += 1; G.rerolls = 0;
+      G.freeDice = true; G.rested = false; // 新一波：免费骰子回满，本波休整次数重置
       if (G.buffs.ddFree) G.freeReroll = 1; // DD街区：新一波一次免费刷新
       this.refreshShop();
       G.phase = 'prep';
       this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
+      this.ui.restBtn.setVisible(true); this.ui.restTxt.setVisible(true);
       this.saveGame();
       this.updateTop();
     });
@@ -2397,6 +2518,7 @@ Object.assign(GameScene.prototype, {
       wave: G.wave, gold: G.gold, level: G.level, xp: G.xp, xpNeed: G.xpNeed,
       towerHp: G.towerHp, buffs: G.buffs, hexesTaken: G.hexesTaken, packPity: G.packPity,
       field: G.field.map(u => snapUnit(u)), bench: G.bench.map(u => u ? snapUnit(u) : null),
+      fallen: G.fallen.map(u => snapUnit(u)), rested: G.rested || false, freeDice: !!G.freeDice,
       shop: G.shop, enchHeld: G.enchHeld || null, shopEnch: G.shopEnch || null, freeReroll: G.freeReroll || 0
     };
     try { localStorage.setItem('syjt_save_v1', JSON.stringify(snap)); } catch (e) {}
@@ -2411,7 +2533,8 @@ Object.assign(GameScene.prototype, {
     G.field = [];
     Object.assign(G, {
       wave: snap.wave, gold: snap.gold, level: snap.level, xp: snap.xp, xpNeed: snap.xpNeed,
-      towerHp: snap.towerHp, buffs: snap.buffs || {}, hexesTaken: snap.hexesTaken || [], packPity: snap.packPity || 0
+      towerHp: snap.towerHp, buffs: snap.buffs || {}, hexesTaken: snap.hexesTaken || [], packPity: snap.packPity || 0,
+      rested: snap.rested || false, freeDice: snap.freeDice !== undefined ? !!snap.freeDice : true
     });
     G.shop = snap.shop && snap.shop.length ? snap.shop : G.shop;
     G.enchHeld = snap.enchHeld || null;
@@ -2436,6 +2559,14 @@ Object.assign(GameScene.prototype, {
       this.refreshStars(u);
       this.refreshEnchVisual(u);
       this.syncUnitVisual(u);
+    });
+    (snap.fallen || []).forEach(su => {
+      if (!su || !su.cell) return;
+      const u = restoreUnit(su);
+      u.alive = false; u.hp = 0; u.cell = su.cell;
+      const pt = cellCenter(su.cell.c, su.cell.r);
+      u.x = pt.x; u.y = pt.y;
+      G.fallen.push(u);
     });
     this.renderShop();
     this.renderEnchBar();
@@ -2473,7 +2604,7 @@ class MenuScene extends Phaser.Scene {
     menuBtn(this, GW / 2, 460, 260, 52, '玩法说明', () => this._howto.setVisible(true), 22);
     menuBtn(this, GW / 2, 530, 260, 52, '设置', () => this._settings.setVisible(true), 22);
     this.add.text(GW / 2, 600, best > 0 ? '最高波次：第 ' + best + ' 波 / 5' : '最高波次：—', { fontSize: '16px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
-    this.add.text(GW - 16, GH - 16, 'v0.3', { fontSize: '14px', color: '#5b5470', fontFamily: 'monospace' }).setOrigin(1, 1);
+    this.add.text(GW - 16, GH - 16, 'v0.4', { fontSize: '14px', color: '#5b5470', fontFamily: 'monospace' }).setOrigin(1, 1);
     this._settings = createSettingsOverlay(this, 60);
     this._howto = createHowToOverlay(this, 60);
     this.input.on('pointerdown', () => SFX.ac());
