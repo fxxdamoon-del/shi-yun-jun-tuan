@@ -1346,7 +1346,7 @@ Object.assign(GameScene.prototype, {
       const bg = this.textures.exists('scroll')
         ? this.add.image(x, y, 'scroll').setOrigin(0, 0).setInteractive()
         : this.add.rectangle(x + 3, y + 3, 274, 434, 0x14101c).setOrigin(0, 0).setInteractive();
-      const tier = this.add.text(x + 140, y + 62, '', { fontSize: '14px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(0.5, 0);
+      const tier = this.add.text(x + 140, y + 76, '', { fontSize: '14px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(0.5, 0);
       const name = this.add.text(x + 140, y + 100, '', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5, 0);
       const desc = this.add.text(x + 140, y + 140, '', { fontSize: '15px', color: '#6e4f3a', fontFamily: FONT, wordWrap: { width: 220, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
       bg.on('pointerdown', () => this.pickHex(i));
@@ -1367,7 +1367,7 @@ Object.assign(GameScene.prototype, {
         ? this.add.image(x, y, 'scroll').setOrigin(0, 0).setInteractive()
         : this.add.rectangle(x + 3, y + 3, 274, 434, 0x14101c).setOrigin(0, 0).setInteractive();
       const icon = this.add.image(x + 140, y + 110, 'relic_crown').setScale(2).setDepth(1);
-      const name = this.add.text(x + 140, y + 62, '', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5, 0);
+      const name = this.add.text(x + 140, y + 76, '', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5, 0);
       const price = this.add.text(x + 140, y + 150, '', { fontSize: '16px', color: '#8a6d1f', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5, 0);
       const desc = this.add.text(x + 140, y + 190, '', { fontSize: '15px', color: '#6e4f3a', fontFamily: FONT, wordWrap: { width: 220, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
       const sold = this.add.text(x + 140, y + 300, '已购', { fontSize: '18px', color: '#8a6d1f', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5, 0).setVisible(false);
