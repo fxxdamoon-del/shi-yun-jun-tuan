@@ -3,9 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>噬运军团 · v0.6</title>
+<title>噬运军团 · v0.7</title>
 <link rel="icon" href="data:,">
 <style>
+  @font-face {
+    font-family: 'Fusion Pixel 12px';
+    src: url('assets/fonts/fusion-pixel-12px.woff2') format('woff2');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+  }
   html, body { margin: 0; padding: 0; background: #0b0910; height: 100%; overflow: hidden; }
   #game { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }
   #game canvas { image-rendering: pixelated; image-rendering: crisp-edges; }
@@ -20,12 +27,15 @@
 <script>
 'use strict';
 /* ============================================================
-   噬运军团 · v0.6（M5 P0：战士 16 帧精灵表 + 战场背景重渲染）
-   Phaser 4.2.1（jsdelivr CDN）+ 本地 PNG（assets/*-64.png 7 角色 64 级精灵表、assets/fieldbg-b2.png 战场背景、assets/effects/*-64.png 3 条特效）
+   噬运军团 · v0.7（M5 P2：整屏按转运军团画风重做——田园战场 + 水晶塔 + 羊皮纸 UI + 像素字体）
+   Phaser 4.2.1（jsdelivr CDN）+ 本地 PNG（assets/*-64.png 7 角色 64 级精灵表、assets/p2/ 田园背景/水晶塔/羊皮纸 UI、assets/effects/*-64.png 3 条特效）
    其余角色仍是代码在 canvas 上逐像素画的精灵（48x48，Boss 64x64，12 帧/角色）
    音效：WebAudio 合成 SFX + 循环 BGM，无外部音频
    ============================================================ */
 if (!window.Phaser) { document.getElementById('fallback').style.display = 'block'; }
+
+/* M5 P2：像素字体（Fusion Pixel 12px，中文，本地 woff2） */
+const FONT = '"Fusion Pixel 12px", monospace';
 
 /* ---------------- 统一调色板（21 色） ---------------- */
 const PAL = {
@@ -771,6 +781,18 @@ const HEX_POOL = [
   { id: 'bounce',     name: '弹跳',     tier: 'purple', desc: '远程命中弹跳，造成40%伤害', apply: s => { s.buffs.bounce = true; } }
 ];
 const TIER_COLOR = { white: '#cfc9dd', blue: '#6fb7d9', purple: '#8b3fd9', gold: '#c9a227' };
+/* M5 P2：卷轴（浅羊皮纸）上的稀有度字色——用深色版，浅色在纸上看不清 */
+const TIER_COLOR_DARK = { white: '#6e4f3a', blue: '#2f6b8a', purple: '#6b2d8a', gold: '#8a6d1f' };
+/* M5 P2：把亮色字映射到羊皮纸上的深色字（亮灰/浅蓝/浅金在纸上看不清） */
+function p2Dark(hex) {
+  const m = {
+    '#cfc9dd': '#6e4f3a', '#6fb7d9': '#2f6b8a', '#9fd8ef': '#2f6b8a',
+    '#e3cf9e': '#8a6d1f', '#c9a227': '#8a6d1f', '#3fae6a': '#1f5c38',
+    '#8b3fd9': '#6b2d8a', '#d97b3f': '#8a4a1f', '#a83232': '#5e1f24',
+    '#8a84a0': '#6e4f3a'
+  };
+  return m[(hex || '').toLowerCase()] || '#3a2a1c';
+}
 const TIER_NAME = { white: '普通', blue: '优秀', purple: '稀有', gold: '金色' };
 
 /* ---------------- 附魔表（M2：商店常驻第 4 张卡） ---------------- */
@@ -902,10 +924,11 @@ function restoreUnit(s) {
 
 /* ---------------- 菜单共用组件（主菜单 / 暂停 / 结算共用） ---------------- */
 function menuBtn(scene, x, y, w, h, label, cb, fontSize) {
-  const bg = scene.add.rectangle(x, y, w, h, 0x3a3348).setOrigin(0.5).setInteractive().setStrokeStyle(2, 0xc9a227);
-  const txt = scene.add.text(x, y, label, { fontSize: (fontSize || 18) + 'px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-  bg.on('pointerover', () => bg.setFillStyle(0x5b5470));
-  bg.on('pointerout', () => bg.setFillStyle(0x3a3348));
+  // M5 P2：木按钮（深棕底 + 米白字 + 金边），用于主菜单和设置/玩法说明的返回按钮
+  const bg = scene.add.rectangle(x, y, w, h, 0x6e4f3a).setOrigin(0.5).setInteractive().setStrokeStyle(2, 0xc9a227);
+  const txt = scene.add.text(x, y, label, { fontSize: (fontSize || 18) + 'px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+  bg.on('pointerover', () => bg.setFillStyle(0x8a6d4a));
+  bg.on('pointerout', () => bg.setFillStyle(0x6e4f3a));
   bg.on('pointerdown', () => { SFX.click(); cb(); });
   return { bg, txt };
 }
@@ -913,8 +936,10 @@ function menuBtn(scene, x, y, w, h, label, cb, fontSize) {
 function createSettingsOverlay(scene, depth) {
   const c = scene.add.container(0, 0).setDepth(depth || 60).setVisible(false);
   c.add(scene.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0));
-  const panel = scene.add.rectangle(GW / 2, GH / 2, 520, 420, 0x241f30).setStrokeStyle(2, 0xc9a227);
-  const title = scene.add.text(GW / 2, 180, '设置', { fontSize: '30px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+  const panel = scene.textures.exists('panel-520x420')
+    ? scene.add.image(GW / 2, GH / 2, 'panel-520x420')
+    : scene.add.rectangle(GW / 2, GH / 2, 520, 420, 0x241f30).setStrokeStyle(2, 0xc9a227);
+  const title = scene.add.text(GW / 2, 180, '设置', { fontSize: '30px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
   c.add([panel, title]);
   const rows = [];
   const defs = [
@@ -925,9 +950,9 @@ function createSettingsOverlay(scene, depth) {
   ];
   defs.forEach((d, i) => {
     const y = 250 + i * 56;
-    const lab = scene.add.text(GW / 2 - 180, y, d.label, { fontSize: '18px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0, 0.5);
-    const val = scene.add.text(GW / 2 + 180, y, '', { fontSize: '18px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(1, 0.5);
-    const hit = scene.add.rectangle(GW / 2 + 130, y, 110, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const lab = scene.add.text(GW / 2 - 180, y, d.label, { fontSize: '18px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0, 0.5);
+    const val = scene.add.text(GW / 2 + 180, y, '', { fontSize: '18px', color: '#8a6d1f', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(1, 0.5);
+    const hit = scene.add.rectangle(GW / 2 + 130, y, 110, 40, 0x6e4f3a).setInteractive().setStrokeStyle(1, 0xc9a227);
     hit.on('pointerdown', () => {
       if (d.key === 'speed') SETTINGS.speed = SETTINGS.speed === 1 ? 2 : 1;
       else SETTINGS[d.key] = !SETTINGS[d.key];
@@ -947,8 +972,10 @@ function createSettingsOverlay(scene, depth) {
 function createHowToOverlay(scene, depth) {
   const c = scene.add.container(0, 0).setDepth(depth || 60).setVisible(false);
   c.add(scene.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0));
-  const panel = scene.add.rectangle(GW / 2, GH / 2, 680, 500, 0x241f30).setStrokeStyle(2, 0xc9a227);
-  const title = scene.add.text(GW / 2, 150, '玩法说明', { fontSize: '30px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+  const panel = scene.textures.exists('panel-680x500')
+    ? scene.add.image(GW / 2, GH / 2, 'panel-680x500')
+    : scene.add.rectangle(GW / 2, GH / 2, 680, 500, 0x241f30).setStrokeStyle(2, 0xc9a227);
+  const title = scene.add.text(GW / 2, 150, '玩法说明', { fontSize: '30px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
   c.add([panel, title]);
   const steps = [
     { tex: 'warrior64', head: '1. 拖棋子上场', body: '把备战席的棋子拖到战场格子里' },
@@ -960,8 +987,8 @@ function createHowToOverlay(scene, depth) {
   steps.forEach((s, i) => {
     const y = 210 + i * 72;
     const icon = scene.add.image(GW / 2 - 280, y, s.tex, 0).setScale(s.tex === 'boss64' ? 0.7 : 1.05);
-    const head = scene.add.text(GW / 2 - 240, y - 14, s.head, { fontSize: '18px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0, 0.5);
-    const body = scene.add.text(GW / 2 - 240, y + 12, s.body, { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace' }).setOrigin(0, 0.5);
+    const head = scene.add.text(GW / 2 - 240, y - 14, s.head, { fontSize: '18px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0, 0.5);
+    const body = scene.add.text(GW / 2 - 240, y + 12, s.body, { fontSize: '15px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(0, 0.5);
     c.add([icon, head, body]);
   });
   const back = menuBtn(scene, GW / 2, 600, 160, 44, '返回', () => c.setVisible(false), 17);
@@ -972,7 +999,7 @@ function createHowToOverlay(scene, depth) {
 /* ---------------- 场景骨架（方法在后面以 prototype 挂接） ---------------- */
 class GameScene extends Phaser.Scene {
   constructor() { super('Game'); }
-  preload() { // M5 P1：7 角色 64 级精灵表 + 战场背景 + 3 条特效（加载失败时各使用点回退旧路线）
+  preload() { // M5 P2：7 角色 64 级精灵表 + 田园背景 + 水晶塔 + 羊皮纸 UI（加载失败时各使用点回退旧路线）
     this.load.spritesheet('warrior64', 'assets/warrior-64.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('archer64', 'assets/archer-64.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('mage64', 'assets/mage-64.png', { frameWidth: 64, frameHeight: 64 });
@@ -980,10 +1007,30 @@ class GameScene extends Phaser.Scene {
     this.load.spritesheet('elite-slime64', 'assets/elite-slime-64.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('bat64', 'assets/bat-64.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('boss64', 'assets/boss-64.png', { frameWidth: 96, frameHeight: 96 });
-    this.load.image('fieldbg', 'assets/fieldbg-b2.png');
+    this.load.image('fieldbg', 'assets/p2/fieldbg-pastoral.png');
+    this.load.spritesheet('tower64', 'assets/p2/tower-64.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('fx-slime64', 'assets/effects/slime-splat-64.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('fx-bat64', 'assets/effects/bat-swipe-64.png', { frameWidth: 64, frameHeight: 64 });
     this.load.image('fx-bone64', 'assets/effects/bone-spike-64.png');
+    // M5 P2：羊皮纸 UI 套件
+    this.load.image('dice-tray', 'assets/p2/dice-tray.png');
+    this.load.image('dice-btn', 'assets/p2/dice-btn.png');
+    this.load.image('card-parchment', 'assets/p2/card-parchment.png');
+    this.load.image('scroll', 'assets/p2/scroll.png');
+    this.load.image('btn-parchment', 'assets/p2/button-parchment.png');
+    this.load.image('bench-cell', 'assets/p2/bench-cell.png');
+    this.load.image('topbar', 'assets/p2/topbar.png');
+    this.load.image('icon-coin', 'assets/p2/icon-coin.png');
+    this.load.image('icon-heart', 'assets/p2/icon-heart.png');
+    this.load.image('icon-skull', 'assets/p2/icon-skull.png');
+    this.load.image('icon-gem', 'assets/p2/icon-gem.png');
+    this.load.image('panel-440x380', 'assets/p2/panel-440x380.png');
+    this.load.image('panel-360x240', 'assets/p2/panel-360x240.png');
+    this.load.image('panel-680x500', 'assets/p2/panel-680x500.png');
+    this.load.image('panel-520x420', 'assets/p2/panel-520x420.png');
+    this.load.image('panel-420x420', 'assets/p2/panel-420x420.png');
+    this.load.image('panel-560x96', 'assets/p2/panel-560x96.png');
+    this.load.image('field-frame', 'assets/p2/field-frame.png');
   }
   create() {
     buildAllTextures(this);
@@ -1023,50 +1070,66 @@ class GameScene extends Phaser.Scene {
    UI 构建（顶栏 / 战场 / 底部 / 弹层）
    ============================================================ */
 Object.assign(GameScene.prototype, {
-  mkBtn(x, y, w, h, label, cb, fontSize) {
-    const bg = this.add.rectangle(x, y, w, h, 0x3a3348).setOrigin(0, 0).setInteractive().setStrokeStyle(1, 0xc9a227);
+  mkBtn(x, y, w, h, label, cb, fontSize, opts) {
+    opts = opts || {};
+    // M5 P2：图片按钮模式（opts.img，羊皮纸底 + 深棕字，hover 用 tint 加亮）
+    if (opts.img && this.textures.exists(opts.img)) {
+      const bg = this.add.image(x + w / 2, y + h / 2, opts.img).setDisplaySize(w, h).setInteractive();
+      bg.on('pointerover', () => bg.setTint(0xfff2c8));
+      bg.on('pointerout', () => bg.clearTint());
+      bg.on('pointerdown', () => { SFX.click(); cb(); });
+      const txt = this.add.text(x + w / 2, y + h / 2, label, {
+        fontSize: (fontSize || 15) + 'px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold'
+      }).setOrigin(0.5);
+      return { bg, txt };
+    }
+    const fill = opts.fill || 0x3a3348;
+    const bg = this.add.rectangle(x, y, w, h, fill).setOrigin(0, 0).setInteractive().setStrokeStyle(1, 0xc9a227);
     const txt = this.add.text(x + w / 2, y + h / 2, label, {
-      fontSize: (fontSize || 15) + 'px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold'
+      fontSize: (fontSize || 15) + 'px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold'
     }).setOrigin(0.5);
     bg.on('pointerover', () => bg.setFillStyle(0x5b5470));
-    bg.on('pointerout', () => bg.setFillStyle(0x3a3348));
+    bg.on('pointerout', () => bg.setFillStyle(fill));
     bg.on('pointerdown', () => { SFX.click(); cb(); });
     return { bg, txt };
   },
 
   buildTopBar() {
-    this.add.rectangle(0, 0, GW, 56, 0x241f30).setOrigin(0, 0);
-    this.add.rectangle(0, 54, GW, 2, 0x8a6d1f).setOrigin(0, 0);
-    this.add.text(16, 28, '噬运军团', { fontSize: '20px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0, 0.5);
+    // M5 P2：顶栏改用木头条（assets/p2/topbar.png，1280×48）+ 金色小图标 + 像素字
+    if (this.textures.exists('topbar')) this.add.image(0, 0, 'topbar').setOrigin(0, 0);
+    else { this.add.rectangle(0, 0, GW, 56, 0x241f30).setOrigin(0, 0); this.add.rectangle(0, 54, GW, 2, 0x8a6d1f).setOrigin(0, 0); }
+    this.add.text(16, 24, '噬运军团', { fontSize: '20px', color: '#c9a227', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0, 0.5);
     this.ui = {};
-    this.ui.waveTxt = this.add.text(220, 24, '第 1 波 / 5', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0, 0.5);
-    this.add.rectangle(220, 44, 120, 5, 0x14101c).setOrigin(0, 0);
-    this.ui.waveProg = this.add.rectangle(220, 44, 0, 5, 0xc9a227).setOrigin(0, 0);
-    this.add.circle(346, 28, 7, 0xc9a227);
-    this.add.circle(346, 28, 3, 0x8a6d1f);
-    this.ui.goldTxt = this.add.text(358, 28, '金币 8', { fontSize: '16px', color: '#e3cf9e', fontFamily: 'monospace' }).setOrigin(0, 0.5);
-    this.ui.popTxt = this.add.text(480, 28, '人口 0/4', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0, 0.5);
-    this.add.text(600, 28, '塔', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0, 0.5);
-    this.add.rectangle(625, 20, 140, 16, 0x5e1f24).setOrigin(0, 0);
-    this.ui.towerHpFg = this.add.rectangle(625, 20, 140, 16, 0x3fae6a).setOrigin(0, 0);
-    this.ui.towerHpTxt = this.add.text(695, 28, '100/100', { fontSize: '13px', color: '#ffffff', fontFamily: 'monospace' }).setOrigin(0.5, 0.5);
-    this.add.text(800, 28, '经验', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0, 0.5);
-    this.add.rectangle(850, 20, 120, 16, 0x3a3348).setOrigin(0, 0);
-    this.ui.xpFg = this.add.rectangle(850, 20, 0, 16, 0x6fb7d9).setOrigin(0, 0);
-    this.ui.lvlTxt = this.add.text(980, 28, 'Lv1', { fontSize: '16px', color: '#6fb7d9', fontFamily: 'monospace' }).setOrigin(0, 0.5);
-    const sp = this.mkBtn(1008, 12, 56, 32, '1x', () => {
+    if (this.textures.exists('icon-skull')) this.add.image(196, 24, 'icon-skull').setDisplaySize(28, 28);
+    this.ui.waveTxt = this.add.text(216, 20, '第 1 波 / 5', { fontSize: '16px', color: '#f2ead8', fontFamily: FONT }).setOrigin(0, 0.5);
+    this.add.rectangle(216, 36, 120, 5, 0x14101c).setOrigin(0, 0);
+    this.ui.waveProg = this.add.rectangle(216, 36, 0, 5, 0xc9a227).setOrigin(0, 0);
+    if (this.textures.exists('icon-coin')) this.add.image(352, 24, 'icon-coin').setDisplaySize(28, 28);
+    else { this.add.circle(352, 24, 7, 0xc9a227); this.add.circle(352, 24, 3, 0x8a6d1f); }
+    this.ui.goldTxt = this.add.text(370, 24, '金币 8', { fontSize: '16px', color: '#e3cf9e', fontFamily: FONT }).setOrigin(0, 0.5);
+    this.ui.popTxt = this.add.text(480, 24, '人口 0/4', { fontSize: '16px', color: '#f2ead8', fontFamily: FONT }).setOrigin(0, 0.5);
+    if (this.textures.exists('icon-heart')) this.add.image(600, 24, 'icon-heart').setDisplaySize(28, 28);
+    else this.add.text(600, 24, '塔', { fontSize: '16px', color: '#f2ead8', fontFamily: FONT }).setOrigin(0, 0.5);
+    this.add.rectangle(625, 16, 140, 16, 0x5e1f24).setOrigin(0, 0);
+    this.ui.towerHpFg = this.add.rectangle(625, 16, 140, 16, 0x3fae6a).setOrigin(0, 0);
+    this.ui.towerHpTxt = this.add.text(695, 24, '100/100', { fontSize: '13px', color: '#ffffff', fontFamily: FONT }).setOrigin(0.5, 0.5);
+    this.add.text(800, 24, '经验', { fontSize: '16px', color: '#f2ead8', fontFamily: FONT }).setOrigin(0, 0.5);
+    this.add.rectangle(850, 16, 120, 16, 0x3a3348).setOrigin(0, 0);
+    this.ui.xpFg = this.add.rectangle(850, 16, 0, 16, 0x6fb7d9).setOrigin(0, 0);
+    this.ui.lvlTxt = this.add.text(980, 24, 'Lv1', { fontSize: '16px', color: '#6fb7d9', fontFamily: FONT }).setOrigin(0, 0.5);
+    const sp = this.mkBtn(1008, 8, 56, 32, '1x', () => {
       G.speedMul = G.speedMul === 1 ? 2 : G.speedMul === 2 ? 4 : 1;
       this.ui.speedTxt.setText(G.speedMul + 'x');
     });
     this.ui.speedTxt = sp.txt;
-    const mu = this.mkBtn(1072, 12, 56, 32, '音效开', () => {
+    const mu = this.mkBtn(1072, 8, 56, 32, '音效开', () => {
       SETTINGS.sfx = !SETTINGS.sfx; saveSettings();
       SFX.enabled = SETTINGS.sfx;
       this.ui.muteTxt.setText(SFX.enabled ? '音效开' : '音效关');
     }, 13);
     this.ui.muteTxt = mu.txt;
-    this.mkBtn(1136, 12, 56, 32, '暂停', () => this.pauseGame(), 13);
-    this.mkBtn(1200, 12, 56, 32, '？', () => { this.ui.howto.setVisible(true); }, 16);
+    this.mkBtn(1136, 8, 56, 32, '暂停', () => this.pauseGame(), 13);
+    this.mkBtn(1200, 8, 56, 32, '？', () => { this.ui.howto.setVisible(true); }, 16);
   },
 
   setCellHi(cell, on) { // 拖拽格子高亮：有背景图时用半透明绿罩，无背景时用旧棋盘色
@@ -1076,10 +1139,11 @@ Object.assign(GameScene.prototype, {
   },
 
   buildField() {
-    // M5 P1：战场背景改用重渲染的像素图（assets/fieldbg-b2.png）；加载失败时回退旧的色块棋盘
+    // M5 P2：战场背景改用田园全景（assets/p2/fieldbg-pastoral.png）；加载失败时回退旧的色块棋盘
     const hasBg = this.textures.exists('fieldbg');
     this._hasBg = hasBg;
     if (hasBg) this.add.image(0, 0, 'fieldbg').setOrigin(0, 0).setDepth(-1);
+    if (this.textures.exists('field-frame')) this.add.image(16, 64, 'field-frame').setOrigin(0, 0).setDepth(0);
     else this.add.rectangle(16, 64, 1248, 416, 0x1e5233).setOrigin(0, 0);
     this.cellRects = [];
     for (let c = 0; c < GRID.cols; c++) {
@@ -1140,21 +1204,27 @@ Object.assign(GameScene.prototype, {
       this.tweens.add({ targets: f, x: f.x + 60, duration: 6000 + i * 900, yoyo: true, repeat: -1 });
       this.fogBlobs.push(f);
     }
-    // 塔（左端）+ 呼吸光晕
+    // 塔（左端）+ 呼吸光晕 — M5 P2：水晶塔精灵表（tower-64），血条做进塔顶
     this.towerHalo = this.add.circle(TOWER_POS.x, TOWER_POS.y - 6, 46, 0x6fb7d9, 0.16).setDepth(1);
     this.tweens.add({ targets: this.towerHalo, scaleX: 1.18, scaleY: 1.18, alpha: 0.08, duration: 1400, yoyo: true, repeat: -1 });
-    this.add.image(TOWER_POS.x, TOWER_POS.y, 'tower').setScale(1.5).setDepth(2);
-    this.add.rectangle(TOWER_POS.x - 38, 196, 76, 8, 0x5e1f24).setOrigin(0, 0).setDepth(4);
-    this.ui.towerBarFg = this.add.rectangle(TOWER_POS.x - 38, 196, 76, 8, 0x3fae6a).setOrigin(0, 0).setDepth(4);
+    if (this.textures.exists('tower64')) {
+      this.towerImg = this.add.image(TOWER_POS.x, TOWER_POS.y, 'tower64', 0).setScale(1.75).setDepth(2);
+      this._towerFrame = 0;
+    } else {
+      this.towerImg = this.add.image(TOWER_POS.x, TOWER_POS.y, 'tower').setScale(1.5).setDepth(2);
+    }
+    this.add.rectangle(TOWER_POS.x - 30, TOWER_POS.y - 64, 60, 8, 0x3a2a1c).setOrigin(0, 0).setDepth(4);
+    this.ui.towerBarFg = this.add.rectangle(TOWER_POS.x - 30, TOWER_POS.y - 64, 60, 8, 0x3fae6a).setOrigin(0, 0).setDepth(4);
   },
 
   buildBottom() {
-    // ---- 底部三块面板（深底金边） ----
-    this.add.rectangle(16, 496, 288, 176, 0x241f30).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
-    this.add.rectangle(460, 496, 300, 176, 0x241f30).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
-    this.add.rectangle(760, 496, 520, 176, 0x241f30).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
-    // ---- 左：掷骰召唤 ----
-    this.ui.diceLbl = this.add.text(30, 512, '掷骰 · 3金', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' });
+    // ---- 底部三块面板（M5 P2：左掷骰区用木托盘图，中/右用深木底金边） ----
+    if (this.textures.exists('dice-tray')) this.add.image(16, 496, 'dice-tray').setOrigin(0, 0).setDepth(0);
+    else this.add.rectangle(16, 496, 288, 176, 0x241f30).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
+    this.add.rectangle(460, 496, 300, 176, 0x3a2a1c).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
+    this.add.rectangle(760, 496, 520, 176, 0x3a2a1c).setOrigin(0, 0).setStrokeStyle(2, 0xc9a227).setDepth(0);
+    // ---- 左：掷骰召唤（托盘三凹槽正对三颗骰子） ----
+    this.ui.diceLbl = this.add.text(30, 512, '掷骰 · 3金', { fontSize: '15px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' });
     this.dice = [];
     const diceKeys = ['warrior', 'archer', 'mage'];
     for (let i = 0; i < 3; i++) {
@@ -1170,65 +1240,78 @@ Object.assign(GameScene.prototype, {
       die._cls = k;
       this.dice.push(die);
     }
-    this.ui.diceBtn = this.mkBtn(212, 552, 80, 44, '掷骰 3金', () => this.rollDice(), 14);
-    this.ui.diceTxt = this.add.text(30, 636, '', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
+    this.ui.diceBtn = this.mkBtn(212, 552, 80, 44, '掷骰 3金', () => this.rollDice(), 14, { img: 'dice-btn' });
+    this.ui.diceTxt = this.add.text(212, 602, '', { fontSize: '12px', color: '#6e4f3a', fontFamily: FONT });
     // ---- M4：遗物图标栏（掷骰区左下角，28×28 横排，点开看详情） ----
     this.ui.relicRow = this.add.container(0, 0).setDepth(2);
     this.renderRelicRow();
     // ---- 开包 ----
-    this.mkBtn(320, 520, 120, 64, '开包 5金', () => this.openPack(), 18);
-    this.ui.packPityTxt = this.add.text(320, 600, '保底 0/30', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
+    this.mkBtn(320, 520, 120, 64, '开包 5金', () => this.openPack(), 18, { img: 'btn-parchment' });
+    this.ui.packPityTxt = this.add.text(320, 600, '保底 0/30', { fontSize: '12px', color: '#241a12', fontFamily: FONT });
     // ---- 中：波次信息 + 开始战斗 + 备战席 ----
-    this.ui.waveInfo = this.add.text(470, 506, '', { fontSize: '15px', color: '#f2ead8', fontFamily: 'monospace' });
-    const st = this.mkBtn(520, 540, 180, 60, '开始战斗', () => this.startBattle(), 22);
+    this.ui.waveInfo = this.add.text(470, 506, '', { fontSize: '15px', color: '#f2ead8', fontFamily: FONT });
+    const st = this.mkBtn(520, 540, 180, 60, '开始战斗', () => this.startBattle(), 22, { img: 'btn-parchment' });
     this.ui.startBtn = st.bg; this.ui.startTxt = st.txt;
     // 撤退按钮（开始战斗旁边，竖条，不压商店/备战席）
-    const rb = this.mkBtn(706, 540, 48, 60, '撤退', () => this.openRest(), 14);
+    const rb = this.mkBtn(706, 540, 48, 60, '撤退', () => this.openRest(), 14, { fill: 0x5e1f24 });
     this.ui.restBtn = rb.bg; this.ui.restTxt = rb.txt;
-    this.add.text(470, 624, '备战席（拖上场 / 拖到场上棋子身上 = 吞噬）', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
+    this.add.text(470, 624, '备战席（拖上场 / 拖到场上棋子身上 = 吞噬）', { fontSize: '12px', color: '#cfc9dd', fontFamily: FONT });
     this.benchSlots = [];
     for (let i = 0; i < 5; i++) {
-      const r = this.add.rectangle(470 + i * 58, 640, 52, 52, 0x14101c).setOrigin(0, 0).setStrokeStyle(1, 0x3a3348);
+      let r;
+      if (this.textures.exists('bench-cell')) r = this.add.image(470 + i * 58, 640, 'bench-cell').setOrigin(0, 0).setDisplaySize(52, 52);
+      else r = this.add.rectangle(470 + i * 58, 640, 52, 52, 0x14101c).setOrigin(0, 0).setStrokeStyle(1, 0x3a3348);
       this.benchSlots.push(r);
     }
-    // ---- 右：商店（M2：3 张棋子卡 + 1 张附魔卡） ----
-    this.add.text(770, 506, '商店', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' });
-    this.add.text(870, 509, '每波免费刷新', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
+    // ---- 右：商店（M2：3 张棋子卡 + 1 张附魔卡；M5 P2：羊皮纸卡 + 稀有度色框） ----
+    this.add.text(770, 506, '商店', { fontSize: '15px', color: '#e3cf9e', fontFamily: FONT, fontStyle: 'bold' });
+    this.add.text(870, 509, '每波免费刷新', { fontSize: '12px', color: '#cfc9dd', fontFamily: FONT });
     this.shopCards = [];
     for (let i = 0; i < 4; i++) {
       const x = 770 + i * 122;
-      const border = this.add.rectangle(x, 516, 118, 120, 0xcfc9dd).setOrigin(0, 0);
-      const bg = this.add.rectangle(x + 2, 518, 114, 116, 0x14101c).setOrigin(0, 0).setInteractive();
+      const border = this.add.rectangle(x - 2, 514, 122, 124, 0xcfc9dd).setOrigin(0, 0);
+      let bg;
+      if (this.textures.exists('card-parchment')) bg = this.add.image(x, 516, 'card-parchment').setOrigin(0, 0).setDisplaySize(118, 120).setInteractive();
+      else bg = this.add.rectangle(x + 2, 518, 114, 116, 0x14101c).setOrigin(0, 0).setInteractive();
       const img = this.add.image(x + 59, 566, 'warrior64', 0).setScale(0.85).setDepth(1);
-      const name = this.add.text(x + 59, 606, '', { fontSize: '13px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5, 0);
-      const cost = this.add.text(x + 59, 622, '', { fontSize: '12px', color: '#e3cf9e', fontFamily: 'monospace' }).setOrigin(0.5, 0);
-      const tag = this.add.text(x + 6, 520, '附魔', { fontSize: '11px', color: '#14101c', backgroundColor: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0, 0).setDepth(2).setVisible(false);
+      const name = this.add.text(x + 59, 606, '', { fontSize: '13px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5, 0);
+      const cost = this.add.text(x + 59, 622, '', { fontSize: '12px', color: '#8a6d1f', fontFamily: FONT }).setOrigin(0.5, 0);
+      const tag = this.add.text(x + 6, 520, '附魔', { fontSize: '11px', color: '#14101c', backgroundColor: '#c9a227', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0, 0).setDepth(2).setVisible(false);
       if (i < 3) bg.on('pointerdown', () => this.buyShop(i));
       else bg.on('pointerdown', () => this.buyEnchant());
       this.shopCards.push({ border, bg, img, name, cost, tag });
     }
-    this.ui.rerollBtn = this.mkBtn(770, 648, 150, 36, '刷新 2金', () => this.rerollShop());
-    this.mkBtn(935, 648, 150, 36, '买经验 4金', () => this.buyXp());
+    this.ui.rerollBtn = this.mkBtn(770, 648, 150, 36, '刷新 2金', () => this.rerollShop(), 14, { img: 'btn-parchment' });
+    this.mkBtn(935, 648, 150, 36, '买经验 4金', () => this.buyXp(), 14, { img: 'btn-parchment' });
     // ---- 附魔栏（买下的附魔先放这里，拖到棋子身上） ----
     const ebBorder = this.add.rectangle(1100, 648, 150, 36, 0xc9a227).setOrigin(0, 0);
-    const ebBg = this.add.rectangle(1102, 650, 146, 32, 0x14101c).setOrigin(0, 0).setInteractive({ draggable: true });
+    const ebBg = this.add.rectangle(1102, 650, 146, 32, 0xfaf3d8).setOrigin(0, 0).setInteractive({ draggable: true });
     ebBg._enchSlot = true;
     const ebIcon = this.add.image(1118, 666, 'spark').setScale(1.1).setDepth(1).setVisible(false);
-    const ebLabel = this.add.text(1175, 666, '附魔栏（空）', { fontSize: '13px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
+    const ebLabel = this.add.text(1175, 666, '附魔栏（空）', { fontSize: '13px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(0.5);
     this.ui.enchBar = { border: ebBorder, bg: ebBg, icon: ebIcon, label: ebLabel };
   },
 
   buildOverlays() {
-    // 暂停菜单
+    // 暂停菜单 — M5 P2：羊皮纸面板 + 羊皮纸按钮
     const pa = this.add.container(0, 0).setDepth(50).setVisible(false);
     pa.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0));
-    pa.add(this.add.rectangle(GW / 2, GH / 2, 420, 420, 0x241f30).setStrokeStyle(2, 0xc9a227));
-    pa.add(this.add.text(GW / 2, 180, '已暂停', { fontSize: '30px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5));
+    if (this.textures.exists('panel-420x420')) pa.add(this.add.image(GW / 2, GH / 2, 'panel-420x420'));
+    else pa.add(this.add.rectangle(GW / 2, GH / 2, 420, 420, 0x241f30).setStrokeStyle(2, 0xc9a227));
+    pa.add(this.add.text(GW / 2, 180, '已暂停', { fontSize: '30px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5));
     const pauseBtn = (y, label, cb) => {
-      const b = this.add.rectangle(GW / 2, y, 240, 48, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
-      const t = this.add.text(GW / 2, y, label, { fontSize: '19px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-      b.on('pointerover', () => b.setFillStyle(0x5b5470));
-      b.on('pointerout', () => b.setFillStyle(0x3a3348));
+      let b, t;
+      if (this.textures.exists('btn-parchment')) {
+        b = this.add.image(GW / 2, y, 'btn-parchment').setDisplaySize(200, 48).setInteractive();
+        b.on('pointerover', () => b.setTint(0xfff2c8));
+        b.on('pointerout', () => b.clearTint());
+        t = this.add.text(GW / 2, y, label, { fontSize: '19px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+      } else {
+        b = this.add.rectangle(GW / 2, y, 240, 48, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
+        t = this.add.text(GW / 2, y, label, { fontSize: '19px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+        b.on('pointerover', () => b.setFillStyle(0x5b5470));
+        b.on('pointerout', () => b.setFillStyle(0x3a3348));
+      }
       b.on('pointerdown', () => { SFX.click(); cb(); });
       pa.add([b, t]);
     };
@@ -1240,106 +1323,131 @@ Object.assign(GameScene.prototype, {
     // 设置 / 玩法说明（共用组件）
     this.ui.settings = createSettingsOverlay(this, 70);
     this.ui.howto = createHowToOverlay(this, 70);
-    // 新手引导（首次提示）
+    // 新手引导（首次提示）— M5 P2：羊皮纸面板 + 深棕字
     const tut = this.add.container(0, 0).setDepth(40).setVisible(false);
-    tut.add(this.add.rectangle(GW / 2, 120, 560, 96, 0x241f30).setStrokeStyle(2, 0xc9a227));
-    tut.add(this.add.text(GW / 2, 100, '① 把备战席的棋子拖到战场格子里', { fontSize: '17px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5));
-    tut.add(this.add.text(GW / 2, 128, '② 点「开始战斗」开打', { fontSize: '17px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5));
-    const tutBtn = this.add.rectangle(GW / 2, 158, 120, 30, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
-    const tutTxt = this.add.text(GW / 2, 158, '知道了', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace' }).setOrigin(0.5);
+    if (this.textures.exists('panel-560x96')) tut.add(this.add.image(GW / 2, 120, 'panel-560x96'));
+    else tut.add(this.add.rectangle(GW / 2, 120, 560, 96, 0x241f30).setStrokeStyle(2, 0xc9a227));
+    tut.add(this.add.text(GW / 2, 100, '① 把备战席的棋子拖到战场格子里', { fontSize: '17px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5));
+    tut.add(this.add.text(GW / 2, 128, '② 点「开始战斗」开打', { fontSize: '17px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5));
+    const tutBtn = this.add.rectangle(GW / 2, 158, 120, 30, 0x6e4f3a).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const tutTxt = this.add.text(GW / 2, 158, '知道了', { fontSize: '15px', color: '#f2ead8', fontFamily: FONT }).setOrigin(0.5);
     tutBtn.on('pointerdown', () => { SFX.click(); tut.setVisible(false); markTutDone(); });
     tut.add([tutBtn, tutTxt]);
     this.ui.tutBox = tut;
-    // 海克斯弹层
+    // 海克斯弹层 — M5 P2：三张羊皮卷轴（scroll.png，280×440），稀有度色框在卷轴外
     const hex = this.add.container(0, 0).setDepth(40).setVisible(false);
     hex.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0));
-    hex.add(this.add.text(GW / 2, 150, '海克斯强化 · 三选一', { fontSize: '30px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5));
-    hex.add(this.add.text(GW / 2, 190, '点一张卡，强化立刻生效', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace' }).setOrigin(0.5));
+    hex.add(this.add.text(GW / 2, 70, '海克斯强化 · 三选一', { fontSize: '30px', color: '#c9a227', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5));
+    hex.add(this.add.text(GW / 2, 102, '点一张卡，强化立刻生效', { fontSize: '15px', color: '#cfc9dd', fontFamily: FONT }).setOrigin(0.5));
     hex._cards = [];
     for (let i = 0; i < 3; i++) {
-      const x = 290 + i * 250;
-      const border = this.add.rectangle(x, 230, 220, 280, 0xcfc9dd).setOrigin(0, 0);
-      const bg = this.add.rectangle(x + 3, 233, 214, 274, 0x14101c).setOrigin(0, 0).setInteractive();
-      const tier = this.add.text(x + 110, 260, '', { fontSize: '14px', color: '#cfc9dd', fontFamily: 'monospace' }).setOrigin(0.5, 0);
-      const name = this.add.text(x + 110, 300, '', { fontSize: '22px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0);
-      const desc = this.add.text(x + 110, 360, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 180, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
+      const x = 180 + i * 320, y = 130;
+      const border = this.add.rectangle(x - 2, y - 2, 284, 444, 0xcfc9dd).setOrigin(0, 0);
+      const bg = this.textures.exists('scroll')
+        ? this.add.image(x, y, 'scroll').setOrigin(0, 0).setInteractive()
+        : this.add.rectangle(x + 3, y + 3, 274, 434, 0x14101c).setOrigin(0, 0).setInteractive();
+      const tier = this.add.text(x + 140, y + 62, '', { fontSize: '14px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(0.5, 0);
+      const name = this.add.text(x + 140, y + 100, '', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5, 0);
+      const desc = this.add.text(x + 140, y + 140, '', { fontSize: '15px', color: '#6e4f3a', fontFamily: FONT, wordWrap: { width: 220, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
       bg.on('pointerdown', () => this.pickHex(i));
       hex.add([border, bg, tier, name, desc]);
       hex._cards.push({ border, bg, tier, name, desc });
     }
     this.ui.hexBox = hex;
-    // 遗物铺（第 2/4 波胜利后：3 张遗物卡，可买多张，点返回进下一波）
+    // 遗物铺（第 2/4 波胜利后：3 张遗物卡，可买多张，点返回进下一波）— M5 P2：三张羊皮卷轴
     const rl = this.add.container(0, 0).setDepth(40).setVisible(false);
     rl.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0));
-    rl.add(this.add.text(GW / 2, 150, '遗物铺 · 骰子遗物', { fontSize: '30px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5));
-    rl.add(this.add.text(GW / 2, 190, '点一张卡购买（每种限购一次），买完点返回进下一波', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace' }).setOrigin(0.5));
+    rl.add(this.add.text(GW / 2, 70, '遗物铺 · 骰子遗物', { fontSize: '30px', color: '#c9a227', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5));
+    rl.add(this.add.text(GW / 2, 102, '点一张卡购买（每种限购一次），买完点返回进下一波', { fontSize: '15px', color: '#cfc9dd', fontFamily: FONT }).setOrigin(0.5));
     rl._cards = [];
     for (let i = 0; i < 3; i++) {
-      const x = 290 + i * 250;
-      const border = this.add.rectangle(x, 230, 220, 280, 0xc9a227).setOrigin(0, 0);
-      const bg = this.add.rectangle(x + 3, 233, 214, 274, 0x14101c).setOrigin(0, 0).setInteractive();
-      const icon = this.add.image(x + 110, 292, 'relic_crown').setScale(2).setDepth(1);
-      const name = this.add.text(x + 110, 322, '', { fontSize: '22px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0);
-      const price = this.add.text(x + 110, 356, '', { fontSize: '16px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0);
-      const desc = this.add.text(x + 110, 392, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 180, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
-      const sold = this.add.text(x + 110, 440, '已购', { fontSize: '18px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0).setVisible(false);
+      const x = 180 + i * 320, y = 130;
+      const border = this.add.rectangle(x - 2, y - 2, 284, 444, 0xc9a227).setOrigin(0, 0);
+      const bg = this.textures.exists('scroll')
+        ? this.add.image(x, y, 'scroll').setOrigin(0, 0).setInteractive()
+        : this.add.rectangle(x + 3, y + 3, 274, 434, 0x14101c).setOrigin(0, 0).setInteractive();
+      const icon = this.add.image(x + 140, y + 110, 'relic_crown').setScale(2).setDepth(1);
+      const name = this.add.text(x + 140, y + 62, '', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5, 0);
+      const price = this.add.text(x + 140, y + 150, '', { fontSize: '16px', color: '#8a6d1f', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5, 0);
+      const desc = this.add.text(x + 140, y + 190, '', { fontSize: '15px', color: '#6e4f3a', fontFamily: FONT, wordWrap: { width: 220, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
+      const sold = this.add.text(x + 140, y + 300, '已购', { fontSize: '18px', color: '#8a6d1f', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5, 0).setVisible(false);
       bg.on('pointerdown', () => this.buyRelic(i));
       rl.add([border, bg, icon, name, price, desc, sold]);
       rl._cards.push({ border, bg, icon, name, price, desc, sold, els: [border, bg, icon, name, price, desc, sold] });
     }
-    const rlBackBg = this.add.rectangle(GW / 2, 560, 200, 48, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
-    const rlBackTxt = this.add.text(GW / 2, 560, '返回', { fontSize: '20px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-    rlBackBg.on('pointerover', () => rlBackBg.setFillStyle(0x5b5470));
-    rlBackBg.on('pointerout', () => rlBackBg.setFillStyle(0x3a3348));
+    let rlBackBg, rlBackTxt;
+    if (this.textures.exists('btn-parchment')) {
+      rlBackBg = this.add.image(GW / 2, 620, 'btn-parchment').setDisplaySize(200, 48).setInteractive();
+      rlBackBg.on('pointerover', () => rlBackBg.setTint(0xfff2c8));
+      rlBackBg.on('pointerout', () => rlBackBg.clearTint());
+      rlBackTxt = this.add.text(GW / 2, 620, '返回', { fontSize: '20px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+    } else {
+      rlBackBg = this.add.rectangle(GW / 2, 620, 200, 48, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
+      rlBackTxt = this.add.text(GW / 2, 620, '返回', { fontSize: '20px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+      rlBackBg.on('pointerover', () => rlBackBg.setFillStyle(0x5b5470));
+      rlBackBg.on('pointerout', () => rlBackBg.setFillStyle(0x3a3348));
+    }
     rlBackBg.on('pointerdown', () => { SFX.click(); this.closeRelicShop(); });
     rl.add([rlBackBg, rlBackTxt]);
     this.ui.relicBox = rl;
-    // 强化面板（单击棋子弹出：属性 + 强化按钮，仅备战阶段）
+    // 强化面板（单击棋子弹出：属性 + 强化按钮，仅备战阶段）— M5 P2：羊皮纸面板 + 木按钮
     const rf = this.add.container(0, 0).setDepth(45).setVisible(false);
     const rfBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
     rfBg.on('pointerdown', () => rf.setVisible(false));
-    const rfPanel = this.add.rectangle(GW / 2, GH / 2, 440, 380, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
+    const rfPanel = this.textures.exists('panel-440x380')
+      ? this.add.image(GW / 2, GH / 2, 'panel-440x380').setInteractive()
+      : this.add.rectangle(GW / 2, GH / 2, 440, 380, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
     rf.add([rfBg, rfPanel]);
-    rf._title = this.add.text(GW / 2, 210, '', { fontSize: '22px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-    rf._stats = this.add.text(GW / 2, 250, '', { fontSize: '16px', color: '#cfc9dd', fontFamily: 'monospace', align: 'center', lineSpacing: 10 }).setOrigin(0.5, 0);
-    const rfBtnBg = this.add.rectangle(GW / 2, 470, 260, 48, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
-    const rfBtnTxt = this.add.text(GW / 2, 470, '', { fontSize: '18px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    rf._title = this.add.text(GW / 2, 210, '', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+    rf._stats = this.add.text(GW / 2, 250, '', { fontSize: '16px', color: '#6e4f3a', fontFamily: FONT, align: 'center', lineSpacing: 10 }).setOrigin(0.5, 0);
+    const rfBtnBg = this.add.rectangle(GW / 2, 470, 260, 48, 0x6e4f3a).setInteractive().setStrokeStyle(2, 0xc9a227);
+    const rfBtnTxt = this.add.text(GW / 2, 470, '', { fontSize: '18px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
     rfBtnBg.on('pointerdown', () => this.doReinforce());
-    const rfCloseBg = this.add.rectangle(GW / 2, 540, 120, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
-    const rfCloseTxt = this.add.text(GW / 2, 540, '关闭', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5);
+    const rfCloseBg = this.textures.exists('btn-parchment')
+      ? this.add.image(GW / 2, 540, 'btn-parchment').setDisplaySize(120, 40).setInteractive()
+      : this.add.rectangle(GW / 2, 540, 120, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const rfCloseTxt = this.add.text(GW / 2, 540, '关闭', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
     rfCloseBg.on('pointerdown', () => { SFX.click(); rf.setVisible(false); });
     rf.add([rf._title, rf._stats, rfBtnBg, rfBtnTxt, rfCloseBg, rfCloseTxt]);
     rf._btnBg = rfBtnBg; rf._btnTxt = rfBtnTxt;
     this.ui.reinforceBox = rf;
-    // 休整面板（撤退休整：回血 + 复活 + 修塔，每波备战限一次）
+    // 休整面板（撤退休整：回血 + 复活 + 修塔，每波备战限一次）— M5 P2：羊皮纸面板 + 木按钮
     const rs = this.add.container(0, 0).setDepth(45).setVisible(false);
     const rsBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
     rsBg.on('pointerdown', () => rs.setVisible(false));
-    const rsPanel = this.add.rectangle(GW / 2, GH / 2, 440, 380, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
+    const rsPanel = this.textures.exists('panel-440x380')
+      ? this.add.image(GW / 2, GH / 2, 'panel-440x380').setInteractive()
+      : this.add.rectangle(GW / 2, GH / 2, 440, 380, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
     rs.add([rsBg, rsPanel]);
-    rs._title = this.add.text(GW / 2, 210, '撤退休整', { fontSize: '22px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-    rs._status = this.add.text(GW / 2, 250, '', { fontSize: '16px', color: '#cfc9dd', fontFamily: 'monospace', align: 'center', lineSpacing: 10 }).setOrigin(0.5, 0);
-    const rsBtnBg = this.add.rectangle(GW / 2, 470, 260, 48, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
-    const rsBtnTxt = this.add.text(GW / 2, 470, '休整 3金', { fontSize: '18px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    rs._title = this.add.text(GW / 2, 210, '撤退休整', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+    rs._status = this.add.text(GW / 2, 250, '', { fontSize: '16px', color: '#6e4f3a', fontFamily: FONT, align: 'center', lineSpacing: 10 }).setOrigin(0.5, 0);
+    const rsBtnBg = this.add.rectangle(GW / 2, 470, 260, 48, 0x6e4f3a).setInteractive().setStrokeStyle(2, 0xc9a227);
+    const rsBtnTxt = this.add.text(GW / 2, 470, '休整 3金', { fontSize: '18px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
     rsBtnBg.on('pointerdown', () => this.doRest());
-    const rsCloseBg = this.add.rectangle(GW / 2, 540, 120, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
-    const rsCloseTxt = this.add.text(GW / 2, 540, '关闭', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5);
+    const rsCloseBg = this.textures.exists('btn-parchment')
+      ? this.add.image(GW / 2, 540, 'btn-parchment').setDisplaySize(120, 40).setInteractive()
+      : this.add.rectangle(GW / 2, 540, 120, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const rsCloseTxt = this.add.text(GW / 2, 540, '关闭', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
     rsCloseBg.on('pointerdown', () => { SFX.click(); rs.setVisible(false); });
     rs.add([rs._title, rs._status, rsBtnBg, rsBtnTxt, rsCloseBg, rsCloseTxt]);
     rs._btnBg = rsBtnBg; rs._btnTxt = rsBtnTxt;
     this.ui.restBox = rs;
-    // 遗物详情（点底部图标栏弹出：名字 + 效果 + 状态，紧凑框）
+    // 遗物详情（点底部图标栏弹出：名字 + 效果 + 状态，紧凑框）— M5 P2：羊皮纸面板
     const rd = this.add.container(0, 0).setDepth(46).setVisible(false);
     const rdBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
     rdBg.on('pointerdown', () => rd.setVisible(false));
-    const rdPanel = this.add.rectangle(GW / 2, GH / 2, 360, 240, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
+    const rdPanel = this.textures.exists('panel-360x240')
+      ? this.add.image(GW / 2, GH / 2, 'panel-360x240').setInteractive()
+      : this.add.rectangle(GW / 2, GH / 2, 360, 240, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
     rd.add([rdBg, rdPanel]);
-    rd._title = this.add.text(GW / 2, 268, '', { fontSize: '22px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    rd._title = this.add.text(GW / 2, 268, '', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
     rd._icon = this.add.image(GW / 2, 300, 'relic_crown').setScale(2);
-    rd._desc = this.add.text(GW / 2, 336, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 300, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
-    rd._status = this.add.text(GW / 2, 400, '', { fontSize: '13px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
-    const rdCloseBg = this.add.rectangle(GW / 2, 448, 120, 36, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
-    const rdCloseTxt = this.add.text(GW / 2, 448, '关闭', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5);
+    rd._desc = this.add.text(GW / 2, 336, '', { fontSize: '15px', color: '#6e4f3a', fontFamily: FONT, wordWrap: { width: 300, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
+    rd._status = this.add.text(GW / 2, 400, '', { fontSize: '13px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(0.5);
+    const rdCloseBg = this.textures.exists('btn-parchment')
+      ? this.add.image(GW / 2, 448, 'btn-parchment').setDisplaySize(120, 36).setInteractive()
+      : this.add.rectangle(GW / 2, 448, 120, 36, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const rdCloseTxt = this.add.text(GW / 2, 448, '关闭', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
     rdCloseBg.on('pointerdown', () => { SFX.click(); rd.setVisible(false); });
     rd.add([rd._title, rd._icon, rd._desc, rd._status, rdCloseBg, rdCloseTxt]);
     this.ui.relicDetail = rd;
@@ -1347,25 +1455,33 @@ Object.assign(GameScene.prototype, {
     const rev = this.add.container(0, 0).setDepth(40).setVisible(false);
     rev.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0));
     rev._img = this.add.image(GW / 2, 300, 'warrior64', 0).setScale(2.25);
-    rev._name = this.add.text(GW / 2, 420, '', { fontSize: '26px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-    rev._rar = this.add.text(GW / 2, 460, '', { fontSize: '18px', color: '#c9a227', fontFamily: 'monospace' }).setOrigin(0.5);
+    rev._name = this.add.text(GW / 2, 420, '', { fontSize: '26px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+    rev._rar = this.add.text(GW / 2, 460, '', { fontSize: '18px', color: '#c9a227', fontFamily: FONT }).setOrigin(0.5);
     rev.add([rev._img, rev._name, rev._rar]);
     this.ui.revealBox = rev;
-    // 结算弹层
+    // 结算弹层 — M5 P2：羊皮纸按钮（200×56，正好是 btn-parchment 原尺寸）
     const end = this.add.container(0, 0).setDepth(45).setVisible(false);
     end.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.75).setOrigin(0, 0));
-    end._title = this.add.text(GW / 2, 220, '', { fontSize: '44px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-    end._stats = this.add.text(GW / 2, 300, '', { fontSize: '17px', color: '#cfc9dd', fontFamily: 'monospace', align: 'center' }).setOrigin(0.5, 0);
-    const rb = this.add.rectangle(GW / 2 - 115, 450, 200, 56, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
-    const rt = this.add.text(GW / 2 - 115, 450, '再来一局', { fontSize: '20px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-    rb.on('pointerover', () => rb.setFillStyle(0x5b5470));
-    rb.on('pointerout', () => rb.setFillStyle(0x3a3348));
-    rb.on('pointerdown', () => { SFX.click(); clearSave(); this.resetGame(); });
-    const qb = this.add.rectangle(GW / 2 + 115, 450, 200, 56, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
-    const qt = this.add.text(GW / 2 + 115, 450, '回主菜单', { fontSize: '20px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
-    qb.on('pointerover', () => qb.setFillStyle(0x5b5470));
-    qb.on('pointerout', () => qb.setFillStyle(0x3a3348));
-    qb.on('pointerdown', () => { SFX.click(); this.quitToMenu(); });
+    end._title = this.add.text(GW / 2, 220, '', { fontSize: '44px', color: '#c9a227', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+    end._stats = this.add.text(GW / 2, 300, '', { fontSize: '17px', color: '#cfc9dd', fontFamily: FONT, align: 'center' }).setOrigin(0.5, 0);
+    const endBtn = (cx, label, cb) => {
+      let b, t;
+      if (this.textures.exists('btn-parchment')) {
+        b = this.add.image(cx, 450, 'btn-parchment').setInteractive();
+        b.on('pointerover', () => b.setTint(0xfff2c8));
+        b.on('pointerout', () => b.clearTint());
+        t = this.add.text(cx, 450, label, { fontSize: '20px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+      } else {
+        b = this.add.rectangle(cx, 450, 200, 56, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
+        t = this.add.text(cx, 450, label, { fontSize: '20px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+        b.on('pointerover', () => b.setFillStyle(0x5b5470));
+        b.on('pointerout', () => b.setFillStyle(0x3a3348));
+      }
+      b.on('pointerdown', () => { SFX.click(); cb(); });
+      return [b, t];
+    };
+    const [rb, rt] = endBtn(GW / 2 - 115, '再来一局', () => { clearSave(); this.resetGame(); });
+    const [qb, qt] = endBtn(GW / 2 + 115, '回主菜单', () => this.quitToMenu());
     end.add([end._title, end._stats, rb, rt, qb, qt]);
     this.ui.endBox = end;
   },
@@ -1377,17 +1493,17 @@ Object.assign(GameScene.prototype, {
     this.ui.popTxt.setText('人口 ' + G.field.length + '/' + (4 + (G.level - 1)));
     this.ui.towerHpFg.width = Math.max(0, 140 * G.towerHp / G.towerMax);
     this.ui.towerHpTxt.setText(G.towerHp + '/' + G.towerMax);
-    this.ui.towerBarFg.width = Math.max(0, 76 * G.towerHp / G.towerMax);
+    this.ui.towerBarFg.width = Math.max(0, 60 * G.towerHp / G.towerMax);
     this.ui.xpFg.width = Math.max(0, 120 * G.xp / G.xpNeed);
     this.ui.lvlTxt.setText('Lv' + G.level);
     this.ui.rerollBtn.txt.setText(G.freeReroll > 0 ? '免费刷新' : '刷新 ' + (2 + G.rerolls) + '金');
     // 掷骰按钮文案：每波第一次免费
     if (this.ui.diceBtn) this.ui.diceBtn.txt.setText(G.freeDice ? '掷骰 免费' : '掷骰 3金');
     if (this.ui.diceLbl) this.ui.diceLbl.setText(G.freeDice ? '掷骰 · 免费' : '掷骰 · 3金');
-    // 撤退按钮状态：备战阶段才可用，第 1 波 / 已休整 / 金币不足时置灰
+    // 撤退按钮状态：备战阶段才可用，第 1 波 / 已休整 / 金币不足时置灰（M5 P2：底色改红棕）
     if (this.ui.restBtn) {
       const canRest = G.phase === 'prep' && G.wave > 1 && !G.rested && G.gold >= 3;
-      this.ui.restBtn.setFillStyle(canRest ? 0x3a3348 : 0x5b5470);
+      this.ui.restBtn.setFillStyle(canRest ? 0x5e1f24 : 0x5b5470);
       this.ui.restBtn.setAlpha(canRest ? 1 : 0.6);
       this.ui.restTxt.setAlpha(canRest ? 1 : 0.6);
     }
@@ -1425,7 +1541,7 @@ Object.assign(GameScene.prototype, {
     u.sprite = img;
     u.hpBg = this.add.rectangle(u.x, u.y - 54, 56, 6, 0x5e1f24).setDepth(4).setVisible(false);
     u.hpFg = this.add.rectangle(u.x - 28, u.y - 54, 56, 6, 0x3fae6a).setOrigin(0, 0.5).setDepth(4).setVisible(false);
-    u.devTxt = this.add.text(u.x, u.y + 52, '', { fontSize: '11px', color: '#c9a227', fontFamily: 'monospace' }).setOrigin(0.5, 0).setDepth(4).setVisible(false);
+    u.devTxt = this.add.text(u.x, u.y + 52, '', { fontSize: '11px', color: '#c9a227', fontFamily: FONT }).setOrigin(0.5, 0).setDepth(4).setVisible(false);
     u.starImgs = [];
     return img;
   },
@@ -1803,7 +1919,7 @@ Object.assign(GameScene.prototype, {
       const r = RARITY.find(x => x.key === card.rarity);
       c.border.setFillStyle(hexColor(r.color));
       c.img.setTexture(SHEET_KEY[CLASSES[card.cls].tex], 0).clearTint().setAlpha(1).setScale(0.85);
-      c.name.setText(CLASSES[card.cls].name + ' · ' + r.name).setColor(r.color);
+      c.name.setText(CLASSES[card.cls].name + ' · ' + r.name).setColor(p2Dark(r.color));
       c.cost.setText(r.cost + '金');
       c.tag.setVisible(false);
     });
@@ -1813,12 +1929,12 @@ Object.assign(GameScene.prototype, {
     ec.border.setFillStyle(0xc9a227);
     if (e) {
       ec.img.setTexture('spark').setTint(e.tint).setAlpha(1).setScale(2.4);
-      ec.name.setText(e.name).setColor(e.color);
+      ec.name.setText(e.name).setColor(p2Dark(e.color));
       ec.cost.setText(e.cost + '金');
       ec.tag.setVisible(true);
     } else {
       ec.img.setTexture('spark').setTint(0x5b5470).setAlpha(0.35).setScale(2.4);
-      ec.name.setText('（已购）').setColor('#8a84a0');
+      ec.name.setText('（已购）').setColor('#6e4f3a');
       ec.cost.setText('');
       ec.tag.setVisible(false);
     }
@@ -1885,10 +2001,10 @@ Object.assign(GameScene.prototype, {
     if (G.enchHeld) {
       const e = ENCHANTS[G.enchHeld];
       bar.icon.setTexture('spark').setTint(e.tint).setVisible(true);
-      bar.label.setText(e.name + '附魔').setColor(e.color);
+      bar.label.setText(e.name + '附魔').setColor(p2Dark(e.color));
     } else {
       bar.icon.setVisible(false);
-      bar.label.setText('附魔栏（空）').setColor('#8a84a0');
+      bar.label.setText('附魔栏（空）').setColor('#6e4f3a');
     }
   },
 
@@ -1901,7 +2017,7 @@ Object.assign(GameScene.prototype, {
       const r = relicById(id);
       if (!r) return;
       const cx = 30 + i * 34 + 14, cy = 656 + 14;
-      const tile = this.add.rectangle(cx, cy, 28, 28, 0x14101c).setStrokeStyle(1, 0x3a3348);
+      const tile = this.add.rectangle(cx, cy, 28, 28, 0x6e4f3a).setStrokeStyle(1, 0xc9a227);
       const img = this.add.image(cx, cy, r.tex).setScale(1.75).setInteractive();
       img._relicId = id;
       img.on('pointerdown', () => this.showRelicDetail(id));
@@ -1957,7 +2073,7 @@ Object.assign(GameScene.prototype, {
       '吞噬 ' + u.devourCount + '/5　升星进度 ' + u.starProg + '/3');
     rf._btnTxt.setText('强化 ' + cost + '金（攻/血+8%）');
     const afford = G.gold >= cost;
-    rf._btnBg.setFillStyle(afford ? 0x3a3348 : 0x5b5470);
+    rf._btnBg.setFillStyle(afford ? 0x6e4f3a : 0x5b5470);
     rf._btnBg.setAlpha(afford ? 1 : 0.6);
   },
   doReinforce() {
@@ -1996,7 +2112,7 @@ Object.assign(GameScene.prototype, {
     else if (G.rested) reason = '本波已休整过';
     else if (G.gold < 3) reason = '金币不足（需 3 金）';
     const can = !reason;
-    rs._btnBg.setFillStyle(can ? 0x3a3348 : 0x5b5470);
+    rs._btnBg.setFillStyle(can ? 0x6e4f3a : 0x5b5470);
     rs._btnBg.setAlpha(can ? 1 : 0.6);
     rs._btnTxt.setText(reason || '休整 3金');
     rs._btnTxt.setAlpha(can ? 1 : 0.6);
@@ -2217,7 +2333,7 @@ Object.assign(GameScene.prototype, {
     choices.forEach((h, i) => {
       const c = this.ui.hexBox._cards[i];
       c.border.setFillStyle(hexColor(TIER_COLOR[h.tier]));
-      c.tier.setText(TIER_NAME[h.tier] + '海克斯').setColor(TIER_COLOR[h.tier]);
+      c.tier.setText(TIER_NAME[h.tier] + '海克斯').setColor(TIER_COLOR_DARK[h.tier]);
       c.name.setText(h.name);
       c.desc.setText(h.desc);
     });
@@ -2248,7 +2364,7 @@ Object.assign(GameScene.prototype, {
       if (!r) return;
       c.icon.setTexture(r.tex);
       c.name.setText(r.name);
-      c.price.setText(r.cost + '金').setColor('#e3cf9e');
+      c.price.setText(r.cost + '金').setColor('#8a6d1f');
       c.desc.setText(r.desc);
       c.sold.setVisible(false);
       c.bg.setAlpha(1);
@@ -2288,7 +2404,7 @@ Object.assign(GameScene.prototype, {
   /* ---------- 特效 ---------- */
   floatText(x, y, str, color, size, big) {
     const t = this.add.text(x, y, str, {
-      fontSize: (size || 15) + 'px', color: color || '#ffffff', fontFamily: 'monospace',
+      fontSize: (size || 15) + 'px', color: color || '#ffffff', fontFamily: FONT,
       fontStyle: 'bold', stroke: '#14101c', strokeThickness: 3
     }).setOrigin(0.5).setDepth(20);
     if (big) t.setScale(1.4);
@@ -2396,7 +2512,7 @@ Object.assign(GameScene.prototype, {
   bossIntro() {
     const flash = this.add.rectangle(0, 0, GW, GH, 0xffffff, 0.55).setOrigin(0, 0).setDepth(30);
     this.tweens.add({ targets: flash, alpha: 0, duration: 500, onComplete: () => flash.destroy() });
-    const t = this.add.text(GW / 2, 240, '骷髅王 来袭！', { fontSize: '40px', color: '#a83232', fontFamily: 'monospace', fontStyle: 'bold', stroke: '#14101c', strokeThickness: 6 }).setOrigin(0.5).setDepth(31);
+    const t = this.add.text(GW / 2, 240, '骷髅王 来袭！', { fontSize: '40px', color: '#a83232', fontFamily: FONT, fontStyle: 'bold', stroke: '#14101c', strokeThickness: 6 }).setOrigin(0.5).setDepth(31);
     this.tweens.add({ targets: t, alpha: 0, y: 210, duration: 1200, onComplete: () => t.destroy() });
     this.shake(300, 0.015);
     SFX.boss();
@@ -2405,6 +2521,15 @@ Object.assign(GameScene.prototype, {
   /* ---------- 战斗主循环 ---------- */
   tick(time, delta) {
     if (G.paused) return;
+    // M5 P2：水晶塔待机动画（水晶脉动 0–3 帧，每 400ms 换一帧；受击/破碎帧由伤害代码设置）
+    if (this.towerImg && this.textures.exists('tower64') && G.towerHp > 0 && !(this._towerHitUntil && time < this._towerHitUntil)) {
+      this._towerAnimT = (this._towerAnimT || 0) + delta;
+      if (this._towerAnimT >= 400) {
+        this._towerAnimT = 0;
+        this._towerFrame = ((this._towerFrame || 0) + 1) % 4;
+        this.towerImg.setFrame(this._towerFrame);
+      }
+    }
     if (G.phase !== 'battle') return;
     let dt = (delta / 1000) * G.speedMul;
     if (time < G.hitStopUntil) dt = 0; // 顿帧：单位逻辑冻结，视觉照常
@@ -2656,6 +2781,11 @@ Object.assign(GameScene.prototype, {
   damageTower(u) {
     const dmg = Math.max(1, Math.round(u.atk));
     G.towerHp = Math.max(0, G.towerHp - dmg);
+    // M5 P2：水晶塔受击帧（12）闪 150ms；塔破时定格破碎帧（13）
+    if (this.towerImg && this.textures.exists('tower64')) {
+      if (G.towerHp <= 0) this.towerImg.setFrame(13);
+      else { this.towerImg.setFrame(12); this._towerHitUntil = this.time.now + 150; }
+    }
     this.floatText(TOWER_POS.x, TOWER_POS.y - 60, '-' + dmg, '#ff8888', 16);
     this.shake(120, 0.008);
     SFX.hit();
@@ -2882,22 +3012,36 @@ Object.assign(GameScene.prototype, {
    ============================================================ */
 class MenuScene extends Phaser.Scene {
   constructor() { super('Menu'); }
+  preload() {
+    // M5 P2：主菜单也用田园背景 + 64 级精灵剪影（GameScene 会再加载一次，纹理已缓存时跳过）
+    this.load.image('fieldbg', 'assets/p2/fieldbg-pastoral.png');
+    this.load.spritesheet('warrior64', 'assets/warrior-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('archer64', 'assets/archer-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('mage64', 'assets/mage-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('slime64', 'assets/slime-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('bat64', 'assets/bat-64.png', { frameWidth: 64, frameHeight: 64 });
+  }
   create() {
     buildAllTextures(this);
-    // 夜色背景
-    this.add.rectangle(0, 0, GW, GH, 0x14101c).setOrigin(0, 0);
-    this.add.circle(1080, 110, 46, 0xe3cf9e);
-    this.add.circle(1066, 100, 40, 0x14101c); // 月牙
-    // 草地 + 剪影棋子来回走动
-    this.add.rectangle(0, 420, GW, 320, 0x1e5233).setOrigin(0, 0);
-    const keys = ['warrior_idle0', 'archer_idle0', 'mage_idle0', 'slime_idle0', 'bat_idle0'];
+    // M5 P2：田园背景（白天牧场），回退旧夜色
+    if (this.textures.exists('fieldbg')) this.add.image(0, 0, 'fieldbg').setOrigin(0, 0);
+    else {
+      this.add.rectangle(0, 0, GW, GH, 0x14101c).setOrigin(0, 0);
+      this.add.circle(1080, 110, 46, 0xe3cf9e);
+      this.add.circle(1066, 100, 40, 0x14101c); // 月牙
+      this.add.rectangle(0, 420, GW, 320, 0x1e5233).setOrigin(0, 0);
+    }
+    // 草地 + 剪影棋子来回走动（M5 P2：64 级精灵表，深色剪影）
+    const keys = this.textures.exists('warrior64')
+      ? ['warrior64', 'archer64', 'mage64', 'slime64', 'bat64']
+      : ['warrior_idle0', 'archer_idle0', 'mage_idle0', 'slime_idle0', 'bat_idle0'];
     for (let i = 0; i < 5; i++) {
-      const s = this.add.image(150 + i * 220, 560, keys[i]).setScale(2.5).setTint(0x241f30).setAlpha(0.85);
+      const s = this.add.image(150 + i * 220, 560, keys[i], 0).setScale(this.textures.exists('warrior64') ? 1.5 : 2.5).setTint(0x241f30).setAlpha(0.85);
       this.tweens.add({ targets: s, x: s.x + 40, duration: 2600 + i * 300, yoyo: true, repeat: -1 });
     }
-    // LOGO
-    this.add.text(GW / 2, 150, '噬运军团', { fontSize: '72px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold', stroke: '#14101c', strokeThickness: 8 }).setOrigin(0.5);
-    this.add.text(GW / 2, 215, '像素自走棋 · 吞噬进化', { fontSize: '20px', color: '#cfc9dd', fontFamily: 'monospace' }).setOrigin(0.5);
+    // LOGO（M5 P2：深棕字 + 金描边，亮底上可读）
+    this.add.text(GW / 2, 150, '噬运军团', { fontSize: '72px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold', stroke: '#c9a227', strokeThickness: 8 }).setOrigin(0.5);
+    this.add.text(GW / 2, 215, '像素自走棋 · 吞噬进化', { fontSize: '20px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
     // 按钮
     const hasSave = !!loadSave();
     const best = loadBest();
@@ -2906,8 +3050,8 @@ class MenuScene extends Phaser.Scene {
     if (!hasSave) { cont.bg.setAlpha(0.4); cont.txt.setAlpha(0.4); cont.bg.disableInteractive(); }
     menuBtn(this, GW / 2, 460, 260, 52, '玩法说明', () => this._howto.setVisible(true), 22);
     menuBtn(this, GW / 2, 530, 260, 52, '设置', () => this._settings.setVisible(true), 22);
-    this.add.text(GW / 2, 600, best > 0 ? '最高波次：第 ' + best + ' 波 / 5' : '最高波次：—', { fontSize: '16px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
-    this.add.text(GW - 16, GH - 16, 'v0.6', { fontSize: '14px', color: '#5b5470', fontFamily: 'monospace' }).setOrigin(1, 1);
+    this.add.text(GW / 2, 600, best > 0 ? '最高波次：第 ' + best + ' 波 / 5' : '最高波次：—', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
+    this.add.text(GW - 16, GH - 16, 'v0.7', { fontSize: '14px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(1, 1);
     this._settings = createSettingsOverlay(this, 60);
     this._howto = createHowToOverlay(this, 60);
     this.input.on('pointerdown', () => SFX.ac());
@@ -2927,7 +3071,17 @@ const config = {
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   scene: [MenuScene, GameScene]
 };
-window.addEventListener('load', () => { new Phaser.Game(config); });
+/* M5 P2：等像素字体就绪再开游戏（否则首屏文字回退 monospace）；2s 超时兜底 */
+window.addEventListener('load', () => {
+  const start = () => { new Phaser.Game(config); };
+  if (document.fonts && document.fonts.load) {
+    let done = false;
+    const to = setTimeout(() => { if (!done) { done = true; start(); } }, 2000);
+    document.fonts.load('24px "Fusion Pixel 12px"').then(() => {
+      if (!done) { done = true; clearTimeout(to); start(); }
+    }).catch(() => { if (!done) { done = true; clearTimeout(to); start(); } });
+  } else start();
+});
 </script>
 </body>
 </html>
