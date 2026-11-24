@@ -753,14 +753,14 @@ const HEX_POOL = [
   { id: 'twin',     name: '双生',     tier: 'purple', desc: '开包多出 1 个棋子',  apply: s => { s.buffs.packBonus = (s.buffs.packBonus || 0) + 1; } },
   { id: 'devlord',  name: '噬主',     tier: 'gold',   desc: '吞噬不占吞噬槽',    apply: s => { s.buffs.freeDevour = true; } },
   // ---- M2 新增（云顶 + 大乱斗海克斯思路） ----
-  { id: 'colossus',   name: '巨像',     tier: 'gold',   desc: '全队体型+35%、生命+35%、免疫减速/冻结', apply: s => { s.buffs.colossus = true; } },
+  { id: 'colossus',   name: '巨像',     tier: 'gold',   desc: '体型生命+35%，免疫控制', apply: s => { s.buffs.colossus = true; } },
   { id: 'dd',         name: 'DD街区',   tier: 'blue',   desc: '每波免费刷新一次商店', apply: s => { s.buffs.ddFree = true; } },
-  { id: 'ticket',     name: '黄金门票', tier: 'gold',   desc: '每次刷新商店25%概率不花钱', apply: s => { s.buffs.goldenTicket = true; } },
-  { id: 'pearl',      name: '珠光莲花', tier: 'gold',   desc: '全队暴击伤害2倍→2.5倍', apply: s => { s.buffs.pearl = true; } },
-  { id: 'execute',    name: '飞身踢',   tier: 'gold',   desc: '攻击处决生命低于15%的敌人（需自身最大生命 ≥ 目标最大生命）', apply: s => { s.buffs.execute = true; } },
-  { id: 'soul',       name: '吞噬灵魂', tier: 'blue',   desc: '每击杀一个敌人，全队生命+2（本局叠加）', apply: s => { s.buffs.soul = true; } },
-  { id: 'speeddemon', name: '速度恶魔', tier: 'blue',   desc: '造成伤害后移速+20%，持续2秒', apply: s => { s.buffs.speedDemon = true; } },
-  { id: 'bounce',     name: '弹跳',     tier: 'purple', desc: '远程攻击命中后弹跳到附近敌人，造成40%伤害', apply: s => { s.buffs.bounce = true; } }
+  { id: 'ticket',     name: '黄金门票', tier: 'gold',   desc: '刷新25%概率免费', apply: s => { s.buffs.goldenTicket = true; } },
+  { id: 'pearl',      name: '珠光莲花', tier: 'gold',   desc: '暴击伤害2.5倍', apply: s => { s.buffs.pearl = true; } },
+  { id: 'execute',    name: '飞身踢',   tier: 'gold',   desc: '血量更高时处决15%以下', apply: s => { s.buffs.execute = true; } },
+  { id: 'soul',       name: '吞噬灵魂', tier: 'blue',   desc: '击杀敌人，全队生命+2', apply: s => { s.buffs.soul = true; } },
+  { id: 'speeddemon', name: '速度恶魔', tier: 'blue',   desc: '伤害后移速+20%（2秒）', apply: s => { s.buffs.speedDemon = true; } },
+  { id: 'bounce',     name: '弹跳',     tier: 'purple', desc: '远程命中弹跳，造成40%伤害', apply: s => { s.buffs.bounce = true; } }
 ];
 const TIER_COLOR = { white: '#cfc9dd', blue: '#6fb7d9', purple: '#8b3fd9', gold: '#c9a227' };
 const TIER_NAME = { white: '普通', blue: '优秀', purple: '稀有', gold: '金色' };
@@ -1215,7 +1215,7 @@ Object.assign(GameScene.prototype, {
       const bg = this.add.rectangle(x + 3, 233, 214, 274, 0x14101c).setOrigin(0, 0).setInteractive();
       const tier = this.add.text(x + 110, 260, '', { fontSize: '14px', color: '#cfc9dd', fontFamily: 'monospace' }).setOrigin(0.5, 0);
       const name = this.add.text(x + 110, 300, '', { fontSize: '22px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5, 0);
-      const desc = this.add.text(x + 110, 360, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 180 }, align: 'center' }).setOrigin(0.5, 0);
+      const desc = this.add.text(x + 110, 360, '', { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace', wordWrap: { width: 180, useAdvancedWrap: true }, align: 'center' }).setOrigin(0.5, 0);
       bg.on('pointerdown', () => this.pickHex(i));
       hex.add([border, bg, tier, name, desc]);
       hex._cards.push({ border, bg, tier, name, desc });
