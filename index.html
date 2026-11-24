@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>噬运军团 · v0.7</title>
+<title>噬运军团 · v0.8</title>
 <link rel="icon" href="data:,">
 <style>
   @font-face {
@@ -27,7 +27,7 @@
 <script>
 'use strict';
 /* ============================================================
-   噬运军团 · v0.7（M5 P2：整屏按转运军团画风重做——田园战场 + 水晶塔 + 羊皮纸 UI + 像素字体）
+   噬运军团 · v0.8（M6：水晶塔参战 + 战后继续/撤退）
    Phaser 4.2.1（jsdelivr CDN）+ 本地 PNG（assets/*-64.png 7 角色 64 级精灵表、assets/p2/ 田园背景/水晶塔/羊皮纸 UI、assets/effects/*-64.png 3 条特效）
    其余角色仍是代码在 canvas 上逐像素画的精灵（48x48，Boss 64x64，12 帧/角色）
    音效：WebAudio 合成 SFX + 循环 BGM，无外部音频
@@ -820,9 +820,28 @@ const RELICS = [
 function relicById(id) { return RELICS.find(r => r.id === id); }
 function hasRelic(id) { return G.relics.includes(id); }
 
+/* ---------------- M6：水晶塔数值（攻10 / 攻速0.8 / 射程260 / 塔血100；四线各3级） ---------------- */
+const TOWER_LINES = [
+  { key: 'atk',   name: '攻击',     costs: [3, 5, 7], step: 4,    fmt: v => String(v) },
+  { key: 'aspd',  name: '攻速',     costs: [3, 5, 7], step: 0.15, fmt: v => v.toFixed(2) },
+  { key: 'range', name: '射程',     costs: [2, 4, 6], step: 40,   fmt: v => String(v) },
+  { key: 'hp',    name: '塔血上限', costs: [3, 4, 5], step: 25,   fmt: v => String(v) }
+];
+function towerStat() {
+  const u = G.towerUpg;
+  return {
+    atk: 10 + 4 * u.atk,
+    aspd: 0.8 + 0.15 * u.aspd,
+    range: 260 + 40 * u.range,
+    maxHp: 100 + 25 * u.hp
+  };
+}
+function towerLineVal(key) { return key === 'hp' ? G.towerMax : towerStat()[key]; }
+
 const G = {
   phase: 'prep', wave: 1, gold: 8, level: 1, xp: 0, xpNeed: 2,
-  towerHp: 100, towerMax: 100, baseGold: 7, interestCap: 8, rerolls: 0,
+  towerHp: 100, towerMax: 100, towerUpg: { atk: 0, aspd: 0, range: 0, hp: 0 }, towerCd: 0,
+  towerStats: { dmg: 0, kills: 0 }, baseGold: 7, interestCap: 8, rerolls: 0,
   speedMul: 1, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
   field: [], bench: [null, null, null, null, null], shop: [], shopEnch: null, enchHeld: null, freeReroll: 0, enemies: [],
   hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false,
@@ -1213,6 +1232,9 @@ Object.assign(GameScene.prototype, {
     } else {
       this.towerImg = this.add.image(TOWER_POS.x, TOWER_POS.y, 'tower').setScale(1.5).setDepth(2);
     }
+    // M6：备战点塔开强化面板（战斗中点塔不弹）
+    this.towerImg.setInteractive({ useHandCursor: true });
+    this.towerImg.on('pointerdown', () => { if (G.phase === 'prep' && !G.paused) this.openTowerPanel(); });
     this.add.rectangle(TOWER_POS.x - 30, TOWER_POS.y - 64, 60, 8, 0x3a2a1c).setOrigin(0, 0).setDepth(4);
     this.ui.towerBarFg = this.add.rectangle(TOWER_POS.x - 30, TOWER_POS.y - 64, 60, 8, 0x3fae6a).setOrigin(0, 0).setDepth(4);
   },
@@ -1252,9 +1274,6 @@ Object.assign(GameScene.prototype, {
     this.ui.waveInfo = this.add.text(470, 506, '', { fontSize: '15px', color: '#f2ead8', fontFamily: FONT });
     const st = this.mkBtn(520, 540, 180, 60, '开始战斗', () => this.startBattle(), 22, { img: 'btn-parchment' });
     this.ui.startBtn = st.bg; this.ui.startTxt = st.txt;
-    // 撤退按钮（开始战斗旁边，竖条，不压商店/备战席）
-    const rb = this.mkBtn(706, 540, 48, 60, '撤退', () => this.openRest(), 14, { fill: 0x5e1f24 });
-    this.ui.restBtn = rb.bg; this.ui.restTxt = rb.txt;
     this.add.text(470, 624, '备战席（拖上场 / 拖到场上棋子身上 = 吞噬）', { fontSize: '12px', color: '#cfc9dd', fontFamily: FONT });
     this.benchSlots = [];
     for (let i = 0; i < 5; i++) {
@@ -1411,27 +1430,61 @@ Object.assign(GameScene.prototype, {
     rf.add([rf._title, rf._stats, rfBtnBg, rfBtnTxt, rfCloseBg, rfCloseTxt]);
     rf._btnBg = rfBtnBg; rf._btnTxt = rfBtnTxt;
     this.ui.reinforceBox = rf;
-    // 休整面板（撤退休整：回血 + 复活 + 修塔，每波备战限一次）— M5 P2：羊皮纸面板 + 木按钮
-    const rs = this.add.container(0, 0).setDepth(45).setVisible(false);
-    const rsBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
-    rsBg.on('pointerdown', () => rs.setVisible(false));
-    const rsPanel = this.textures.exists('panel-440x380')
-      ? this.add.image(GW / 2, GH / 2, 'panel-440x380').setInteractive()
-      : this.add.rectangle(GW / 2, GH / 2, 440, 380, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
-    rs.add([rsBg, rsPanel]);
-    rs._title = this.add.text(GW / 2, 210, '撤退休整', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
-    rs._status = this.add.text(GW / 2, 250, '', { fontSize: '16px', color: '#6e4f3a', fontFamily: FONT, align: 'center', lineSpacing: 10 }).setOrigin(0.5, 0);
-    const rsBtnBg = this.add.rectangle(GW / 2, 470, 260, 48, 0x6e4f3a).setInteractive().setStrokeStyle(2, 0xc9a227);
-    const rsBtnTxt = this.add.text(GW / 2, 470, '休整 3金', { fontSize: '18px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
-    rsBtnBg.on('pointerdown', () => this.doRest());
-    const rsCloseBg = this.textures.exists('btn-parchment')
-      ? this.add.image(GW / 2, 540, 'btn-parchment').setDisplaySize(120, 40).setInteractive()
-      : this.add.rectangle(GW / 2, 540, 120, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
-    const rsCloseTxt = this.add.text(GW / 2, 540, '关闭', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
-    rsCloseBg.on('pointerdown', () => { SFX.click(); rs.setVisible(false); });
-    rs.add([rs._title, rs._status, rsBtnBg, rsBtnTxt, rsCloseBg, rsCloseTxt]);
-    rs._btnBg = rsBtnBg; rs._btnTxt = rsBtnTxt;
-    this.ui.restBox = rs;
+    // M6：塔强化面板（备战点塔弹出：四线强化）— 羊皮纸面板 + 木按钮
+    const tw = this.add.container(0, 0).setDepth(45).setVisible(false);
+    const twBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
+    twBg.on('pointerdown', () => tw.setVisible(false));
+    const twPanel = this.textures.exists('panel-520x420')
+      ? this.add.image(GW / 2, GH / 2, 'panel-520x420').setInteractive()
+      : this.add.rectangle(GW / 2, GH / 2, 520, 420, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
+    tw.add([twBg, twPanel]);
+    tw._title = this.add.text(GW / 2, 185, '水晶塔强化', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+    tw._stats = this.add.text(GW / 2, 220, '', { fontSize: '16px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(0.5);
+    tw._hint = this.add.text(GW / 2, 248, '四线全满共 54 金　与棋子强化共用金币池', { fontSize: '13px', color: '#8a6d1f', fontFamily: FONT }).setOrigin(0.5);
+    tw._rows = [];
+    TOWER_LINES.forEach((line, i) => {
+      const y = 290 + i * 55;
+      const lbl = this.add.text(410, y, '', { fontSize: '17px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0, 0.5);
+      const btnBg = this.add.rectangle(810, y, 140, 40, 0x6e4f3a).setInteractive().setStrokeStyle(2, 0xc9a227);
+      const btnTxt = this.add.text(810, y, '', { fontSize: '16px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+      btnBg.on('pointerdown', () => this.buyTowerLine(i));
+      tw.add([lbl, btnBg, btnTxt]);
+      tw._rows.push({ lbl, btnBg, btnTxt });
+    });
+    const twCloseBg = this.textures.exists('btn-parchment')
+      ? this.add.image(GW / 2, 530, 'btn-parchment').setDisplaySize(120, 40).setInteractive()
+      : this.add.rectangle(GW / 2, 530, 120, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const twCloseTxt = this.add.text(GW / 2, 530, '关闭', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
+    twCloseBg.on('pointerdown', () => { SFX.click(); tw.setVisible(false); });
+    tw.add([tw._title, tw._stats, tw._hint, twCloseBg, twCloseTxt]);
+    this.ui.towerBox = tw;
+    // M6：战后二选一（胜利后只显示「继续」「撤退」，暗罩挡住其他操作）
+    const ch = this.add.container(0, 0).setDepth(50).setVisible(false);
+    ch.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.72).setOrigin(0, 0).setInteractive());
+    if (this.textures.exists('panel-420x420')) ch.add(this.add.image(GW / 2, GH / 2, 'panel-420x420'));
+    else ch.add(this.add.rectangle(GW / 2, GH / 2, 420, 420, 0x241f30).setStrokeStyle(2, 0xc9a227));
+    ch._title = this.add.text(GW / 2, 210, '', { fontSize: '30px', color: '#c9a227', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+    ch._status = this.add.text(GW / 2, 280, '', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT, align: 'center', lineSpacing: 10 }).setOrigin(0.5, 0);
+    const chBtn = (cx, label, cb) => {
+      let b, t;
+      if (this.textures.exists('btn-parchment')) {
+        b = this.add.image(cx, 450, 'btn-parchment').setInteractive();
+        b.on('pointerover', () => b.setTint(0xfff2c8));
+        b.on('pointerout', () => b.clearTint());
+        t = this.add.text(cx, 450, label, { fontSize: '20px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+      } else {
+        b = this.add.rectangle(cx, 450, 200, 56, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
+        t = this.add.text(cx, 450, label, { fontSize: '20px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+        b.on('pointerover', () => b.setFillStyle(0x5b5470));
+        b.on('pointerout', () => b.setFillStyle(0x3a3348));
+      }
+      b.on('pointerdown', () => { SFX.click(); cb(); });
+      return [b, t];
+    };
+    const [cb1, ct1] = chBtn(GW / 2 - 115, '继续', () => this.chooseContinue());
+    const [cb2, ct2] = chBtn(GW / 2 + 115, '撤退', () => this.chooseRetreat());
+    ch.add([ch._title, ch._status, cb1, ct1, cb2, ct2]);
+    this.ui.choiceBox = ch;
     // 遗物详情（点底部图标栏弹出：名字 + 效果 + 状态，紧凑框）— M5 P2：羊皮纸面板
     const rd = this.add.container(0, 0).setDepth(46).setVisible(false);
     const rdBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
@@ -1500,13 +1553,6 @@ Object.assign(GameScene.prototype, {
     // 掷骰按钮文案：每波第一次免费
     if (this.ui.diceBtn) this.ui.diceBtn.txt.setText(G.freeDice ? '掷骰 免费' : '掷骰 3金');
     if (this.ui.diceLbl) this.ui.diceLbl.setText(G.freeDice ? '掷骰 · 免费' : '掷骰 · 3金');
-    // 撤退按钮状态：备战阶段才可用，第 1 波 / 已休整 / 金币不足时置灰（M5 P2：底色改红棕）
-    if (this.ui.restBtn) {
-      const canRest = G.phase === 'prep' && G.wave > 1 && !G.rested && G.gold >= 3;
-      this.ui.restBtn.setFillStyle(canRest ? 0x5e1f24 : 0x5b5470);
-      this.ui.restBtn.setAlpha(canRest ? 1 : 0.6);
-      this.ui.restTxt.setAlpha(canRest ? 1 : 0.6);
-    }
     this.ui.packPityTxt.setText('保底 ' + G.packPity + '/30');
     // 波次进度条
     const prog = ((G.wave - 1) + (G.phase === 'battle' ? 0.5 : 0)) / 5;
@@ -1615,7 +1661,8 @@ Object.assign(GameScene.prototype, {
     for (const u of [...G.field, ...G.bench, ...G.fallen, ...G.enemies]) if (u) this.destroyUnitVisual(u);
     Object.assign(G, {
       phase: 'prep', wave: 1, gold: 8, level: 1, xp: 0, xpNeed: 2,
-      towerHp: 100, baseGold: 7, interestCap: 8, rerolls: 0,
+      towerHp: 100, towerMax: 100, towerUpg: { atk: 0, aspd: 0, range: 0, hp: 0 }, towerCd: 0,
+      towerStats: { dmg: 0, kills: 0 }, baseGold: 7, interestCap: 8, rerolls: 0,
       speedMul: SETTINGS.speed, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
       field: [], bench: [null, null, null, null, null], shop: [], shopEnch: null, enchHeld: null, freeReroll: 0, enemies: [],
       hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false,
@@ -1631,6 +1678,8 @@ Object.assign(GameScene.prototype, {
     this.ui.relicDetail.setVisible(false);
     this.ui.revealBox.setVisible(false);
     this.ui.reinforceBox.setVisible(false);
+    if (this.ui.towerBox) this.ui.towerBox.setVisible(false);
+    if (this.ui.choiceBox) this.ui.choiceBox.setVisible(false);
     this.ui.pauseOverlay.setVisible(false);
     this.ui.settings.setVisible(false);
     this.ui.howto.setVisible(false);
@@ -1644,7 +1693,6 @@ Object.assign(GameScene.prototype, {
     this.renderRelicRow();
     this.updateTop();
     this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
-    this.ui.restBtn.setVisible(true); this.ui.restTxt.setVisible(true);
     this.ui.startTxt.setText('开始战斗');
   },
   addToBench(u) {
@@ -2090,54 +2138,71 @@ Object.assign(GameScene.prototype, {
     this.refreshReinforcePanel();
     this.updateTop();
   },
-  /* ---------- M3：撤退 / 休整 ---------- */
-  openRest() {
-    if (G.phase !== 'prep' || G.paused) return;
-    this.refreshRestPanel();
-    this.ui.restBox.setVisible(true);
+  /* ---------- M6：塔强化面板 ---------- */
+  openTowerPanel() {
+    if (G.phase !== 'prep' || G.paused || !this.ui.towerBox) return;
+    this.refreshTowerPanel();
+    this.ui.towerBox.setVisible(true);
   },
-  refreshRestPanel() {
-    const rs = this.ui.restBox;
-    if (!rs) return;
-    const alive = [...G.field, ...G.bench].filter(u => u && u.alive).length;
-    const wounded = [...G.field, ...G.bench].filter(u => u && u.alive && u.hp < u.maxHp).length;
-    const dead = G.fallen.length;
-    rs._status.setText(
-      '存活棋子 ' + alive + ' 个　残血 ' + wounded + ' 个　阵亡 ' + dead + ' 个\n' +
-      '水晶塔 ' + G.towerHp + '/' + G.towerMax + '\n' +
-      '休整：全队回满血，阵亡棋子复活到 50% 生命\n' +
-      '水晶塔 +25 血（每波备战限一次）');
-    let reason = '';
-    if (G.wave <= 1) reason = '第 1 波无需休整';
-    else if (G.rested) reason = '本波已休整过';
-    else if (G.gold < 3) reason = '金币不足（需 3 金）';
-    const can = !reason;
-    rs._btnBg.setFillStyle(can ? 0x6e4f3a : 0x5b5470);
-    rs._btnBg.setAlpha(can ? 1 : 0.6);
-    rs._btnTxt.setText(reason || '休整 3金');
-    rs._btnTxt.setAlpha(can ? 1 : 0.6);
+  refreshTowerPanel() {
+    const tw = this.ui.towerBox;
+    if (!tw) return;
+    const ts = towerStat();
+    tw._stats.setText('攻击 ' + ts.atk + '　攻速 ' + ts.aspd.toFixed(2) + '/秒　射程 ' + ts.range + '　塔血 ' + G.towerHp + '/' + G.towerMax);
+    TOWER_LINES.forEach((line, i) => {
+      const lvl = G.towerUpg[line.key];
+      const row = tw._rows[i];
+      const cur = towerLineVal(line.key);
+      if (lvl >= 3) {
+        row.lbl.setText(line.name + '　' + line.fmt(cur) + '（满级）');
+        row.btnTxt.setText('已满级');
+        row.btnBg.setFillStyle(0x5b5470); row.btnBg.setAlpha(0.6);
+      } else {
+        const next = cur + line.step;
+        row.lbl.setText(line.name + '　' + line.fmt(cur) + ' → ' + line.fmt(next));
+        row.btnTxt.setText(line.costs[lvl] + '金');
+        const afford = G.gold >= line.costs[lvl];
+        row.btnBg.setFillStyle(afford ? 0x6e4f3a : 0x5b5470);
+        row.btnBg.setAlpha(afford ? 1 : 0.6);
+      }
+    });
   },
-  doRest() {
-    if (G.phase !== 'prep' || G.paused) return;
-    if (G.wave <= 1) { this.floatText(GW / 2, 200, '第 1 波无需休整', '#ff8888', 14); return; }
-    if (G.rested) { this.floatText(GW / 2, 200, '本波已休整过', '#ff8888', 14); return; }
-    if (G.gold < 3) { this.floatText(GW / 2, 200, '金币不足', '#ff8888', 14); return; }
-    G.gold -= 3;
-    G.rested = true;
-    // 全队回满血
+  buyTowerLine(i) {
+    const line = TOWER_LINES[i];
+    if (!line || G.phase !== 'prep' || G.paused) return;
+    const lvl = G.towerUpg[line.key];
+    if (lvl >= 3) return;
+    const cost = line.costs[lvl];
+    if (G.gold < cost) { this.floatText(GW / 2, 200, '金币不足', '#ff8888', 14); return; }
+    G.gold -= cost;
+    G.towerUpg[line.key] = lvl + 1;
+    if (line.key === 'hp') {
+      G.towerMax += 25;
+      G.towerHp = Math.min(G.towerMax, G.towerHp + 25);
+    }
+    SFX.starup();
+    this.floatText(TOWER_POS.x, TOWER_POS.y - 60, line.name + '强化！', '#6fb7d9', 18);
+    this.refreshTowerPanel();
+    this.saveGame();
+    this.updateTop();
+  },
+  /* ---------- M6：回血 / 复活（战后撤退用；原 M3 doRest 的逻辑抽出） ---------- */
+  healAllUnits() {
     for (const u of [...G.field, ...G.bench]) {
       if (!u || !u.alive) continue;
       u.hp = u.maxHp; u.frozenUntil = 0; u.burnUntil = 0; u.slowUntil = 0;
       this.syncUnitVisual(u); this.syncHpBar(u);
     }
-    // 阵亡棋子从 fallen 复活到 50% 最大生命，放回原来格子（格子被占则改放备战席）
+  },
+  reviveFallen(hpFrac) {
+    // 阵亡棋子从 fallen 复活，放回原来格子（格子被占则改放备战席）；没地方放就留在 fallen 里
     for (const u of [...G.fallen]) {
       const cell = u.cell;
       const cellFree = cell && !this.unitAtCell(cell.c, cell.r);
       const benchFree = G.bench.indexOf(null) !== -1;
-      if (!cellFree && !benchFree) continue; // 没地方放，留在 fallen 里
+      if (!cellFree && !benchFree) continue;
       u.alive = true;
-      u.hp = Math.max(1, Math.floor(u.maxHp * 0.5));
+      u.hp = Math.max(1, Math.floor(u.maxHp * hpFrac));
       u.frozenUntil = 0; u.burnUntil = 0; u.slowUntil = 0;
       u.target = null; u.cd = 0;
       if (u.sprite) {
@@ -2158,12 +2223,6 @@ Object.assign(GameScene.prototype, {
       }
       G.fallen = G.fallen.filter(x => x !== u);
     }
-    G.towerHp = Math.min(G.towerMax, G.towerHp + 25);
-    SFX.starup();
-    this.floatText(GW / 2, 200, '休整完毕！', '#6fb7d9', 18);
-    this.refreshRestPanel();
-    this.saveGame();
-    this.updateTop();
   },
   buyXp() {
     if (G.phase !== 'prep') return;
@@ -2474,6 +2533,14 @@ Object.assign(GameScene.prototype, {
       onComplete: () => { o.destroy(); this.ringFx(t.x, t.y, 0x8b3fd9, 46); this.spawnParticles(t.x, t.y, 0x8b3fd9, 10, 130); onHit(); }
     });
   },
+  fireTowerOrb(from, t, onHit) { // M6：水晶塔法球（水晶蓝，复用 fireOrb 模式）
+    const o = this.add.image(from.x, from.y, 'orb').setDepth(6).setTint(0x6fb7d9);
+    this.tweens.add({
+      targets: o, x: t.x, y: t.y - 6, duration: 220,
+      onUpdate: () => { if (Math.random() < 0.5) this.spawnParticles(o.x, o.y, 0x6fb7d9, 1, 30); },
+      onComplete: () => { o.destroy(); this.ringFx(t.x, t.y, 0x6fb7d9, 46); this.spawnParticles(t.x, t.y, 0x6fb7d9, 10, 130); onHit(); }
+    });
+  },
   groundCrack(x, y) { // 战士 / Boss 劈砍留下的地面裂纹，0.4 秒消失
     const g = this.add.graphics().setDepth(5);
     g.lineStyle(3, 0x14101c, 0.9);
@@ -2522,7 +2589,7 @@ Object.assign(GameScene.prototype, {
   tick(time, delta) {
     if (G.paused) return;
     // M5 P2：水晶塔待机动画（水晶脉动 0–3 帧，每 400ms 换一帧；受击/破碎帧由伤害代码设置）
-    if (this.towerImg && this.textures.exists('tower64') && G.towerHp > 0 && !(this._towerHitUntil && time < this._towerHitUntil)) {
+    if (this.towerImg && this.textures.exists('tower64') && G.towerHp > 0 && !(this._towerHitUntil && time < this._towerHitUntil) && !(this._towerAtkUntil && time < this._towerAtkUntil)) {
       this._towerAnimT = (this._towerAnimT || 0) + delta;
       if (this._towerAnimT >= 400) {
         this._towerAnimT = 0;
@@ -2569,6 +2636,21 @@ Object.assign(GameScene.prototype, {
       }
       this.syncHpBar(u);
     }
+    // M6：水晶塔参战（塔在就攻击最近的射程内敌人；战士死光战斗继续）
+    if (G.phase === 'battle' && G.towerHp > 0) {
+      const ts = towerStat();
+      G.towerCd = (G.towerCd || 0) - dt;
+      let best = null, bestD = Infinity;
+      for (const e of G.enemies) {
+        if (!e.alive) continue;
+        const d = Math.hypot(e.x - TOWER_POS.x, e.y - TOWER_POS.y);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+      if (best && bestD <= ts.range && G.towerCd <= 0) {
+        G.towerCd = 1 / ts.aspd;
+        this.towerAttack(best, ts);
+      }
+    }
     if (G.enemies.length && G.enemies.every(e => !e.alive)) this.endWave(true);
     else if (G.towerHp <= 0) this.endWave(false);
   },
@@ -2586,6 +2668,27 @@ Object.assign(GameScene.prototype, {
       return this.towerTarget;
     }
     return null;
+  },
+  towerAttack(target, ts) { // M6：塔攻击（攻击帧 8–11 + 水晶法球；伤害走 applyDamage）
+    if (this.towerImg && this.textures.exists('tower64') && G.towerHp > 0) {
+      this._towerAtkUntil = this.time.now + 300;
+      this.towerImg.setFrame(8);
+      this.time.delayedCall(75, () => { if (this.towerImg && this.time.now < (this._towerAtkUntil || 0)) this.towerImg.setFrame(9); });
+      this.time.delayedCall(150, () => { if (this.towerImg && this.time.now < (this._towerAtkUntil || 0)) this.towerImg.setFrame(10); });
+      this.time.delayedCall(225, () => { if (this.towerImg && this.time.now < (this._towerAtkUntil || 0)) this.towerImg.setFrame(11); });
+    }
+    SFX.orb();
+    const from = { x: TOWER_POS.x, y: TOWER_POS.y - 40 }; // 塔顶水晶
+    this.fireTowerOrb(from, target, () => {
+      if (!target.alive || G.phase !== 'battle' || G.towerHp <= 0) return;
+      // 伪攻击者：applyDamage 只取 atk / crit / ench / side / maxHp / cls / alive；side 用 'tower'，不吃附魔/弹跳/处决
+      const pseudo = { atk: ts.atk, crit: 0, ench: null, side: 'tower', cls: 'tower', alive: true, maxHp: G.towerMax };
+      const before = target.hp;
+      this.applyDamage(pseudo, target, 1);
+      const dealt = Math.max(0, before - Math.max(0, target.hp));
+      G.towerStats.dmg += dealt;
+      if (!target.alive) G.towerStats.kills += 1;
+    });
   },
   setWalkFrame(u) {
     const idx = Math.floor(u.animT / 0.1) % 4;
@@ -2673,6 +2776,7 @@ Object.assign(GameScene.prototype, {
     }
     this.floatText(def.x + (Math.random() * 20 - 10), def.y - 46, String(dmg), isCrit ? '#c9a227' : '#ffffff', isCrit ? 26 : 16, isCrit);
     const sparkColor = att.ench ? ENCHANT_TINT[att.ench] // 附魔：命中火花换对应色
+      : att.cls === 'tower' ? 0x6fb7d9 // M6：塔命中火花水晶蓝
       : att.cls === 'warrior' ? 0xffffff : att.cls === 'archer' ? 0x3fae6a : att.cls === 'mage' ? 0x8b3fd9 : att.cls === 'boss' ? 0xd97b3f : 0x3fae6a;
     this.hitSpark(def.x, def.y - 6, sparkColor);
     this.showHitFx(att, def);
@@ -2828,11 +2932,11 @@ Object.assign(GameScene.prototype, {
     this.saveGame(); // 开打前存档：继续时回到本波备战
     this.ui.tutBox.setVisible(false); markTutDone(); // 新手引导完成
     this.ui.reinforceBox.setVisible(false);
-    this.ui.restBox.setVisible(false);
+    if (this.ui.towerBox) this.ui.towerBox.setVisible(false);
+    if (this.ui.choiceBox) this.ui.choiceBox.setVisible(false);
     BGM.setMode(G.wave === 5 ? 'boss' : 'normal');
     G.phase = 'battle';
     this.ui.startBtn.setVisible(false); this.ui.startTxt.setVisible(false);
-    this.ui.restBtn.setVisible(false); this.ui.restTxt.setVisible(false);
     SFX.tone(220, 0.15, 'sawtooth', 0.10, 440);
     this.updateTop();
     this.spawnWave(G.wave);
@@ -2865,12 +2969,12 @@ Object.assign(GameScene.prototype, {
   advanceWave() { // 新一波推进（endWave / pickHex / closeRelicShop 三处共用）
     G.wave += 1; G.rerolls = 0;
     G.freeDice = true; G.rested = false; // 新一波：免费骰子回满，本波休整次数重置
+    G.towerCd = 0; // M6：塔攻击冷却过波清零
     G.bellUsed = false; G.previewFace = null; // M4：铃与预见过波清空
     if (G.buffs.ddFree) G.freeReroll = 1; // DD街区：新一波一次免费刷新
     this.refreshShop();
     G.phase = 'prep';
     this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
-    this.ui.restBtn.setVisible(true); this.ui.restTxt.setVisible(true);
     this.saveGame();
     this.updateTop();
   },
@@ -2884,16 +2988,41 @@ Object.assign(GameScene.prototype, {
     if (G.stats) G.stats.goldEarned += gain;
     SFX.coin();
     this.floatText(GW / 2, 200, '第 ' + G.wave + ' 波胜利！+' + gain + '金（基础' + G.baseGold + ' 胜利2 利息' + interest + '）', '#e3cf9e', 18);
-    if (G.wave === 3) {
-      this.time.delayedCall(1200, () => { if (G.phase === 'settle') this.showHex(); });
-      return;
-    }
     if (G.wave === 5) { this.time.delayedCall(1200, () => this.gameOver(true)); return; }
-    this.time.delayedCall(1200, () => {
-      if (G.phase !== 'settle') return;
-      if ((G.wave === 2 || G.wave === 4) && this.showRelicShop()) return; // 有遗物可买就弹铺，否则直接推进
-      this.advanceWave();
-    });
+    // M6：胜利后先二选一（继续 / 撤退），选了才走海克斯 / 遗物 / 备战
+    this.time.delayedCall(1200, () => { if (G.phase === 'settle') this.showWinChoice(); });
+  },
+  afterWinContinue() { // 二选一之后：波 3 海克斯 / 波 2·4 遗物铺 / 其余直接推进
+    if (G.wave === 3) { this.showHex(); return; }
+    if ((G.wave === 2 || G.wave === 4) && this.showRelicShop()) return; // 有遗物可买就弹铺，否则直接推进
+    this.advanceWave();
+  },
+  showWinChoice() {
+    const ch = this.ui.choiceBox;
+    if (!ch) { this.afterWinContinue(); return; }
+    const alive = [...G.field, ...G.bench].filter(u => u && u.alive).length;
+    const dead = G.fallen.length;
+    ch._title.setText('第 ' + G.wave + ' 波胜利！');
+    ch._status.setText(
+      '水晶塔 ' + G.towerHp + '/' + G.towerMax + '　存活 ' + alive + ' 个　阵亡 ' + dead + ' 个\n' +
+      '继续：带残血进下一波（死棋、塔血原样）\n' +
+      '撤退：免费回满血 + 阵亡复活，塔血不回\n' +
+      '奖励照常拿（海克斯 / 遗物不跳过）');
+    ch.setVisible(true);
+  },
+  chooseContinue() {
+    if (this.ui.choiceBox) this.ui.choiceBox.setVisible(false);
+    this.afterWinContinue();
+  },
+  chooseRetreat() { // M6 撤退：免费休整（全队回满 + 阵亡满血复活，塔血不回），奖励照常
+    if (this.ui.choiceBox) this.ui.choiceBox.setVisible(false);
+    this.healAllUnits();
+    this.reviveFallen(1);
+    SFX.starup();
+    this.floatText(GW / 2, 200, '撤退休整完毕！', '#6fb7d9', 18);
+    this.saveGame();
+    this.updateTop();
+    this.afterWinContinue();
   },
   gameOver(win) {
     G.phase = 'over';
@@ -2903,7 +3032,7 @@ Object.assign(GameScene.prototype, {
       for (const u of [...G.field]) if (u.alive && u.sprite) this.setUnitFrame(u, 'win');
     }
     const secs = G.stats ? Math.floor((Date.now() - G.stats.startTime) / 1000) : 0;
-    const stats = '用时 ' + Math.floor(secs / 60) + '分' + (secs % 60) + '秒　击杀 ' + (G.stats ? G.stats.kills : 0) + '　获得金币 ' + (G.stats ? G.stats.goldEarned : 0) + '\n最高波次 ' + loadBest() + ' / 5　等级 Lv' + G.level + '　海克斯 ' + G.hexesTaken.length + ' 个';
+    const stats = '用时 ' + Math.floor(secs / 60) + '分' + (secs % 60) + '秒　击杀 ' + (G.stats ? G.stats.kills : 0) + '　获得金币 ' + (G.stats ? G.stats.goldEarned : 0) + '\n最高波次 ' + loadBest() + ' / 5　等级 Lv' + G.level + '　海克斯 ' + G.hexesTaken.length + ' 个\n塔伤害 ' + G.towerStats.dmg + '　塔击杀 ' + G.towerStats.kills;
     this.ui.endBox._title.setText(win ? '胜利！' : '失败…').setColor(win ? '#c9a227' : '#a83232');
     this.ui.endBox._stats.setText((win ? '你守住了 5 波进攻，军团无敌！' : '塔被攻破了，军团覆灭…') + '\n' + stats);
     this.ui.endBox.setVisible(true);
@@ -2946,7 +3075,8 @@ Object.assign(GameScene.prototype, {
     if (G.phase === 'over' || G.phase === 'battle') return; // 只在备战/结算间隙存
     const snap = {
       wave: G.wave, gold: G.gold, level: G.level, xp: G.xp, xpNeed: G.xpNeed,
-      towerHp: G.towerHp, buffs: G.buffs, hexesTaken: G.hexesTaken, packPity: G.packPity,
+      towerHp: G.towerHp, towerMax: G.towerMax, towerUpg: { ...G.towerUpg }, towerStats: { ...G.towerStats },
+      buffs: G.buffs, hexesTaken: G.hexesTaken, packPity: G.packPity,
       field: G.field.map(u => snapUnit(u)), bench: G.bench.map(u => u ? snapUnit(u) : null),
       fallen: G.fallen.map(u => snapUnit(u)), rested: G.rested || false, freeDice: !!G.freeDice,
       relics: [...G.relics], bellUsed: !!G.bellUsed, // M4（previewFace 是瞬态，不进存档）
@@ -2969,6 +3099,14 @@ Object.assign(GameScene.prototype, {
       relics: snap.relics || [], bellUsed: !!snap.bellUsed // M4（previewFace 不进存档，读档时清空——resetGame 已置 null）
     });
     G.shop = snap.shop && snap.shop.length ? snap.shop : G.shop;
+    // M6：塔强化 / 塔统计（旧存档缺字段按全 0；塔血上限按强化重算，快照塔血不超上限）
+    G.towerUpg = snap.towerUpg
+      ? { atk: snap.towerUpg.atk || 0, aspd: snap.towerUpg.aspd || 0, range: snap.towerUpg.range || 0, hp: snap.towerUpg.hp || 0 }
+      : { atk: 0, aspd: 0, range: 0, hp: 0 };
+    G.towerStats = snap.towerStats ? { dmg: snap.towerStats.dmg || 0, kills: snap.towerStats.kills || 0 } : { dmg: 0, kills: 0 };
+    G.towerMax = 100 + 25 * G.towerUpg.hp;
+    G.towerHp = Math.min(snap.towerHp !== undefined ? snap.towerHp : 100, G.towerMax);
+    G.towerCd = 0;
     G.enchHeld = snap.enchHeld || null;
     G.shopEnch = snap.shopEnch || null;
     G.freeReroll = snap.freeReroll || 0;
@@ -3051,7 +3189,7 @@ class MenuScene extends Phaser.Scene {
     menuBtn(this, GW / 2, 460, 260, 52, '玩法说明', () => this._howto.setVisible(true), 22);
     menuBtn(this, GW / 2, 530, 260, 52, '设置', () => this._settings.setVisible(true), 22);
     this.add.text(GW / 2, 600, best > 0 ? '最高波次：第 ' + best + ' 波 / 5' : '最高波次：—', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
-    this.add.text(GW - 16, GH - 16, 'v0.7', { fontSize: '14px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(1, 1);
+    this.add.text(GW - 16, GH - 16, 'v0.8', { fontSize: '14px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(1, 1);
     this._settings = createSettingsOverlay(this, 60);
     this._howto = createHowToOverlay(this, 60);
     this.input.on('pointerdown', () => SFX.ac());
