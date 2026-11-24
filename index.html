@@ -917,6 +917,9 @@ class GameScene extends Phaser.Scene {
     this.buildOverlays();
     if (CONTINUE_RUN) { CONTINUE_RUN = false; this.loadSave(); }
     else this.resetGame();
+    // 点按必须立刻开始拖拽，否则轻点棋子到不了 dragend，强化面板永远打不开
+    this.input.dragDistanceThreshold = 0;
+    this.input.dragTimeThreshold = 0;
     this.input.on('dragstart', (p, o) => this.onDragStart(p, o));
     this.input.on('drag', (p, o, x, y) => this.onDrag(p, o, x, y));
     this.input.on('dragend', (p, o) => this.onDragEnd(p, o));
