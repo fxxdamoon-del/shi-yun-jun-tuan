@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>噬运军团 · v0.2</title>
+<title>噬运军团 · v0.3</title>
 <link rel="icon" href="data:,">
 <style>
   html, body { margin: 0; padding: 0; background: #0b0910; height: 100%; overflow: hidden; }
@@ -20,7 +20,7 @@
 <script>
 'use strict';
 /* ============================================================
-   噬运军团 · v0.2（M1：可发行外观）
+   噬运军团 · v0.3（M2：附魔 + 强化 + 海克斯扩充）
    Phaser 4.2.1（jsdelivr CDN，唯一外部资源）
    所有美术：代码在 canvas 上逐像素画的精灵（48x48，Boss 64x64，12 帧/角色）
    音效：WebAudio 合成 SFX + 循环 BGM，无外部音频
@@ -108,6 +108,7 @@ const SFX = {
   devour() { this.tone(420, 0.22, 'sine', 0.14, 80); this.tone(210, 0.10, 'square', 0.07, 90, 0.10); },
   starup() { [523, 659, 784, 1046].forEach((f, i) => this.tone(f, 0.14, 'triangle', 0.11, 0, i * 0.07)); },
   hexGold(){ [784, 988, 1175, 1568].forEach((f, i) => this.tone(f, 0.16, 'sine', 0.10, 0, i * 0.06)); },
+  zap()    { this.tone(1400, 0.08, 'sawtooth', 0.08, 300); this.noise(0.06, 0.06, 3200); },
   boss()   { this.tone(65, 0.5, 'sine', 0.22, 40); this.noise(0.4, 0.18, 220); },
   slam()   { this.tone(70, 0.25, 'sine', 0.25, 38); this.noise(0.2, 0.2, 300); },
   win()    { [523, 659, 784, 1046, 1319].forEach((f, i) => this.tone(f, 0.18, 'triangle', 0.11, 0, i * 0.09)); },
@@ -705,24 +706,46 @@ const WAVES = [
   { list: [['boss', 1], ['slime', 2], ['bat', 1]] }
 ];
 const HEX_POOL = [
-  { id: 'interest', name: '利滚利',   tier: 'white',  desc: '利息上限 +2',        apply: s => { s.interestCap += 2; } },
+  { id: 'interest', name: '利滚利',   tier: 'blue',   desc: '利息上限 +2',        apply: s => { s.interestCap += 2; } },
   { id: 'quick',    name: '快手',     tier: 'white',  desc: '每波基础金 +1',      apply: s => { s.baseGold += 1; } },
   { id: 'war',      name: '战士专精', tier: 'blue',   desc: '战士攻击 +20%',      apply: s => { s.buffs.warriorAtk = (s.buffs.warriorAtk || 0) + 0.20; } },
   { id: 'arc',      name: '弓手专精', tier: 'blue',   desc: '弓手攻速 +20%',      apply: s => { s.buffs.archerAspd = (s.buffs.archerAspd || 0) + 0.20; } },
   { id: 'mag',      name: '术士专精', tier: 'blue',   desc: '术士攻击 +25%',      apply: s => { s.buffs.mageAtk = (s.buffs.mageAtk || 0) + 0.25; } },
   { id: 'dev',      name: '吞噬学徒', tier: 'blue',   desc: '吞噬收益 +20%',      apply: s => { s.buffs.devour = (s.buffs.devour || 0) + 0.20; } },
   { id: 'twin',     name: '双生',     tier: 'purple', desc: '开包多出 1 个棋子',  apply: s => { s.buffs.packBonus = (s.buffs.packBonus || 0) + 1; } },
-  { id: 'devlord',  name: '噬主',     tier: 'gold',   desc: '吞噬不占吞噬槽',    apply: s => { s.buffs.freeDevour = true; } }
+  { id: 'devlord',  name: '噬主',     tier: 'gold',   desc: '吞噬不占吞噬槽',    apply: s => { s.buffs.freeDevour = true; } },
+  // ---- M2 新增（云顶 + 大乱斗海克斯思路） ----
+  { id: 'colossus',   name: '巨像',     tier: 'gold',   desc: '全队体型+35%、生命+35%、免疫减速/冻结', apply: s => { s.buffs.colossus = true; } },
+  { id: 'dd',         name: 'DD街区',   tier: 'blue',   desc: '每波免费刷新一次商店', apply: s => { s.buffs.ddFree = true; } },
+  { id: 'ticket',     name: '黄金门票', tier: 'gold',   desc: '每次刷新商店25%概率不花钱', apply: s => { s.buffs.goldenTicket = true; } },
+  { id: 'pearl',      name: '珠光莲花', tier: 'gold',   desc: '全队暴击伤害2倍→2.5倍', apply: s => { s.buffs.pearl = true; } },
+  { id: 'execute',    name: '飞身踢',   tier: 'gold',   desc: '攻击直接处决生命低于15%的敌人', apply: s => { s.buffs.execute = true; } },
+  { id: 'soul',       name: '吞噬灵魂', tier: 'blue',   desc: '每击杀一个敌人，全队生命+2（本局叠加）', apply: s => { s.buffs.soul = true; } },
+  { id: 'speeddemon', name: '速度恶魔', tier: 'blue',   desc: '造成伤害后移速+20%，持续2秒', apply: s => { s.buffs.speedDemon = true; } },
+  { id: 'bounce',     name: '弹跳',     tier: 'purple', desc: '远程攻击命中后弹跳到附近敌人，造成40%伤害', apply: s => { s.buffs.bounce = true; } }
 ];
 const TIER_COLOR = { white: '#cfc9dd', blue: '#6fb7d9', purple: '#8b3fd9', gold: '#c9a227' };
 const TIER_NAME = { white: '普通', blue: '优秀', purple: '稀有', gold: '金色' };
+
+/* ---------------- 附魔表（M2：商店常驻第 4 张卡） ---------------- */
+const ENCHANTS = {
+  fire:   { id: 'fire',   name: '烈焰', cost: 5, color: '#d97b3f', tint: 0xd97b3f, desc: '命中点燃，每秒3点，持续3秒' },
+  frost:  { id: 'frost',  name: '寒霜', cost: 4, color: '#6fb7d9', tint: 0x6fb7d9, desc: '命中减速30%，持续2秒' },
+  freeze: { id: 'freeze', name: '冰冻', cost: 6, color: '#9fd8ef', tint: 0x9fd8ef, desc: '命中10%概率冻结1.5秒' },
+  storm:  { id: 'storm',  name: '雷霆', cost: 6, color: '#e3cf9e', tint: 0xe3cf9e, desc: '命中25%概率闪电链，跳到150px内最近敌人，造成本次伤害50%' },
+  vamp:   { id: 'vamp',   name: '吸血', cost: 5, color: '#a83232', tint: 0xa83232, desc: '造成伤害的15%回血' },
+  crit:   { id: 'crit',   name: '暴击', cost: 4, color: '#c9a227', tint: 0xc9a227, desc: '暴击率+15%' },
+  swift:  { id: 'swift',  name: '疾风', cost: 5, color: '#3fae6a', tint: 0x3fae6a, desc: '攻速+25%' },
+  split:  { id: 'split',  name: '分裂', cost: 6, color: '#8b3fd9', tint: 0x8b3fd9, desc: '仅弓手/术士：攻击分裂成2发，各造成60%伤害' }
+};
+const ENCHANT_TINT = { fire: 0xd97b3f, frost: 0x6fb7d9, freeze: 0x9fd8ef, storm: 0xe3cf9e, vamp: 0xa83232, crit: 0xc9a227, swift: 0x3fae6a, split: 0x8b3fd9 };
 
 const G = {
   phase: 'prep', wave: 1, gold: 8, level: 1, xp: 0, xpNeed: 2,
   towerHp: 100, towerMax: 100, baseGold: 5, interestCap: 5, rerolls: 0,
   speedMul: 1, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
-  field: [], bench: [null, null, null, null, null], shop: [], enemies: [],
-  hitStopUntil: 0, dragUnit: null, diceBusy: false
+  field: [], bench: [null, null, null, null, null], shop: [], shopEnch: null, enchHeld: null, freeReroll: 0, enemies: [],
+  hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false
 };
 
 let UID = 1;
@@ -737,7 +760,11 @@ function makeUnit(cls, rarityKey, side) {
     range: c.range, aspd: c.aspd, speed: c.speed, crit: c.crit,
     x: 0, y: 0, cell: null, target: null, cd: Math.random() * 0.3,
     animT: 0, frame: 0, alive: true, sprite: null, hpBg: null, hpFg: null,
-    starImgs: [], devTxt: null, atkCount: 0, baseScale: side === 'enemy' ? 2 : 2
+    starImgs: [], devTxt: null, atkCount: 0, baseScale: side === 'enemy' ? 2 : 2,
+    // ---- M2：附魔 / 强化 / 战斗减益 ----
+    ench: null, reinforce: 0, soulBonus: 0,
+    burnUntil: 0, burnDps: 0, burnNext: 0, slowUntil: 0, frozenUntil: 0, speedBuffUntil: 0,
+    enchImg: null, glow: null, frozenFx: null
   };
   return u;
 }
@@ -770,18 +797,20 @@ function makeEnemy(kind, wave) {
   e.side = 'enemy';
   return e;
 }
-function recompute(u) { // 星级 / 等级 / 海克斯变化后重算
+function recompute(u) { // 星级 / 等级 / 海克斯 / 附魔变化后重算
   const c = CLASSES[u.cls];
   const r = RARITY.find(x => x.key === u.rarity) || RARITY[0];
   const starMult = Math.pow(1.5, u.star - 1);
   const lvlMult = 1 + 0.08 * (u.level - 1);
   const atkBonus = u.cls === 'warrior' ? (G.buffs.warriorAtk || 0) : u.cls === 'mage' ? (G.buffs.mageAtk || 0) : 0;
   const aspdBonus = u.cls === 'archer' ? (G.buffs.archerAspd || 0) : 0;
-  const newMax = Math.round(c.hp * r.mult * starMult * lvlMult);
+  const colossus = G.buffs.colossus ? 1.35 : 1; // 巨像：生命 +35%
+  const newMax = Math.round(c.hp * r.mult * starMult * lvlMult * colossus) + (u.soulBonus || 0); // 吞噬灵魂叠加
   const ratio = u.hp / Math.max(1, u.maxHp);
   u.maxHp = newMax; u.hp = Math.max(1, Math.round(newMax * ratio));
   u.atk = Math.round(c.atk * r.mult * starMult * lvlMult * (1 + atkBonus) * 10) / 10;
-  u.aspd = c.aspd * (1 + aspdBonus);
+  u.aspd = c.aspd * (1 + aspdBonus) * (u.ench === 'swift' ? 1.25 : 1); // 疾风附魔：攻速 +25%
+  u.crit = c.crit + (u.ench === 'crit' ? 0.15 : 0); // 暴击附魔：暴击率 +15%
 }
 function weightedPick(table) { // table: [[key, weight], ...]
   let total = 0; for (const [, w] of table) total += w;
@@ -798,11 +827,12 @@ function cellAt(x, y) {
 
 /* ---------------- 存档快照（继续 = 恢复本局，非继承金币） ---------------- */
 function snapUnit(u) {
-  return { cls: u.cls, rarity: u.rarity, star: u.star, starProg: u.starProg, level: u.level, xp: u.xp, devourCount: u.devourCount, cell: u.cell };
+  return { cls: u.cls, rarity: u.rarity, star: u.star, starProg: u.starProg, level: u.level, xp: u.xp, devourCount: u.devourCount, cell: u.cell, ench: u.ench || null, reinforce: u.reinforce || 0, soulBonus: u.soulBonus || 0 };
 }
 function restoreUnit(s) {
   const u = makeUnit(s.cls, s.rarity, 'player');
   u.star = s.star; u.starProg = s.starProg || 0; u.level = s.level; u.xp = s.xp || 0; u.devourCount = s.devourCount || 0;
+  u.ench = s.ench || null; u.reinforce = s.reinforce || 0; u.soulBonus = s.soulBonus || 0;
   recompute(u);
   return u;
 }
@@ -1050,22 +1080,31 @@ Object.assign(GameScene.prototype, {
       const r = this.add.rectangle(470 + i * 58, 640, 52, 52, 0x14101c).setOrigin(0, 0).setStrokeStyle(1, 0x3a3348);
       this.benchSlots.push(r);
     }
-    // ---- 右：商店 ----
+    // ---- 右：商店（M2：3 张棋子卡 + 1 张附魔卡） ----
     this.add.text(770, 506, '商店', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' });
+    this.add.text(820, 509, '每波免费刷新', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
     this.shopCards = [];
-    for (let i = 0; i < 3; i++) {
-      const x = 770 + i * 165;
-      const border = this.add.rectangle(x, 516, 150, 120, 0xcfc9dd).setOrigin(0, 0);
-      const bg = this.add.rectangle(x + 2, 518, 146, 116, 0x14101c).setOrigin(0, 0).setInteractive();
-      const img = this.add.image(x + 75, 566, 'warrior_idle0').setScale(1.1).setDepth(1);
-      const name = this.add.text(x + 75, 606, '', { fontSize: '13px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5, 0);
-      const cost = this.add.text(x + 75, 622, '', { fontSize: '12px', color: '#e3cf9e', fontFamily: 'monospace' }).setOrigin(0.5, 0);
-      bg.on('pointerdown', () => this.buyShop(i));
-      this.shopCards.push({ border, bg, img, name, cost });
+    for (let i = 0; i < 4; i++) {
+      const x = 770 + i * 122;
+      const border = this.add.rectangle(x, 516, 118, 120, 0xcfc9dd).setOrigin(0, 0);
+      const bg = this.add.rectangle(x + 2, 518, 114, 116, 0x14101c).setOrigin(0, 0).setInteractive();
+      const img = this.add.image(x + 59, 566, 'warrior_idle0').setScale(1.1).setDepth(1);
+      const name = this.add.text(x + 59, 606, '', { fontSize: '13px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5, 0);
+      const cost = this.add.text(x + 59, 622, '', { fontSize: '12px', color: '#e3cf9e', fontFamily: 'monospace' }).setOrigin(0.5, 0);
+      const tag = this.add.text(x + 6, 520, '附魔', { fontSize: '11px', color: '#14101c', backgroundColor: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0, 0).setDepth(2).setVisible(false);
+      if (i < 3) bg.on('pointerdown', () => this.buyShop(i));
+      else bg.on('pointerdown', () => this.buyEnchant());
+      this.shopCards.push({ border, bg, img, name, cost, tag });
     }
     this.ui.rerollBtn = this.mkBtn(770, 648, 150, 36, '刷新 2金', () => this.rerollShop());
     this.mkBtn(935, 648, 150, 36, '买经验 4金', () => this.buyXp());
-    this.add.text(1100, 656, '商店每波免费刷新', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
+    // ---- 附魔栏（买下的附魔先放这里，拖到棋子身上） ----
+    const ebBorder = this.add.rectangle(1100, 648, 150, 36, 0xc9a227).setOrigin(0, 0);
+    const ebBg = this.add.rectangle(1102, 650, 146, 32, 0x14101c).setOrigin(0, 0).setInteractive({ draggable: true });
+    ebBg._enchSlot = true;
+    const ebIcon = this.add.image(1118, 666, 'spark').setScale(1.1).setDepth(1).setVisible(false);
+    const ebLabel = this.add.text(1175, 666, '附魔栏（空）', { fontSize: '13px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
+    this.ui.enchBar = { border: ebBorder, bg: ebBg, icon: ebIcon, label: ebLabel };
   },
 
   buildOverlays() {
@@ -1118,6 +1157,23 @@ Object.assign(GameScene.prototype, {
       hex._cards.push({ border, bg, tier, name, desc });
     }
     this.ui.hexBox = hex;
+    // 强化面板（单击棋子弹出：属性 + 强化按钮，仅备战阶段）
+    const rf = this.add.container(0, 0).setDepth(45).setVisible(false);
+    const rfBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
+    rfBg.on('pointerdown', () => rf.setVisible(false));
+    const rfPanel = this.add.rectangle(GW / 2, GH / 2, 440, 380, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
+    rf.add([rfBg, rfPanel]);
+    rf._title = this.add.text(GW / 2, 210, '', { fontSize: '22px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    rf._stats = this.add.text(GW / 2, 250, '', { fontSize: '16px', color: '#cfc9dd', fontFamily: 'monospace', align: 'center', lineSpacing: 10 }).setOrigin(0.5, 0);
+    const rfBtnBg = this.add.rectangle(GW / 2, 470, 260, 48, 0x3a3348).setInteractive().setStrokeStyle(2, 0xc9a227);
+    const rfBtnTxt = this.add.text(GW / 2, 470, '', { fontSize: '18px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
+    rfBtnBg.on('pointerdown', () => this.doReinforce());
+    const rfCloseBg = this.add.rectangle(GW / 2, 540, 120, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const rfCloseTxt = this.add.text(GW / 2, 540, '关闭', { fontSize: '16px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5);
+    rfCloseBg.on('pointerdown', () => { SFX.click(); rf.setVisible(false); });
+    rf.add([rf._title, rf._stats, rfBtnBg, rfBtnTxt, rfCloseBg, rfCloseTxt]);
+    rf._btnBg = rfBtnBg; rf._btnTxt = rfBtnTxt;
+    this.ui.reinforceBox = rf;
     // 开包揭示弹层
     const rev = this.add.container(0, 0).setDepth(40).setVisible(false);
     rev.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0));
@@ -1155,7 +1211,7 @@ Object.assign(GameScene.prototype, {
     this.ui.towerBarFg.width = Math.max(0, 76 * G.towerHp / G.towerMax);
     this.ui.xpFg.width = Math.max(0, 120 * G.xp / G.xpNeed);
     this.ui.lvlTxt.setText('Lv' + G.level);
-    this.ui.rerollBtn.txt.setText('刷新 ' + (2 + G.rerolls) + '金');
+    this.ui.rerollBtn.txt.setText(G.freeReroll > 0 ? '免费刷新' : '刷新 ' + (2 + G.rerolls) + '金');
     this.ui.packPityTxt.setText('保底 ' + G.packPity + '/30');
     // 波次进度条
     const prog = ((G.wave - 1) + (G.phase === 'battle' ? 0.5 : 0)) / 5;
@@ -1180,7 +1236,7 @@ Object.assign(GameScene.prototype, {
 
   /* ---------- 单位可视化 ---------- */
   spawnUnitSprite(u) {
-    const img = this.add.image(u.x, u.y, u.tex + '_idle0').setScale(u.baseScale).setDepth(3);
+    const img = this.add.image(u.x, u.y, u.tex + '_idle0').setScale(this.unitScale(u)).setDepth(3);
     if (u.side === 'player') img.setInteractive({ draggable: true }); // 只有玩家棋子能拖；敌人不可拖
     img._unit = u;
     u.sprite = img;
@@ -1199,6 +1255,20 @@ Object.assign(GameScene.prototype, {
       u.starImgs.push(s);
     }
   },
+  unitScale(u) { // 巨像：场上体型 +35%；备战席不放大（52 格装不下）
+    if (u.side === 'enemy') return u.baseScale;
+    if (!u.cell) return 1.1;
+    return u.baseScale * (G.buffs.colossus ? 1.35 : 1);
+  },
+  refreshEnchVisual(u) { // 附魔光环 + 头顶元素角标
+    if (u.glow && u.glow.active) u.glow.destroy();
+    if (u.enchImg && u.enchImg.active) u.enchImg.destroy();
+    u.glow = null; u.enchImg = null;
+    if (!u.ench || !u.sprite) return;
+    const tint = ENCHANT_TINT[u.ench];
+    u.glow = this.add.circle(u.x, u.y, 26, tint, 0.16).setDepth(2);
+    u.enchImg = this.add.image(u.x + (u.star - 1) * 7 + 16, u.y - 66, 'spark').setScale(0.9).setDepth(4).setTint(tint);
+  },
   updateDevText(u) {
     if (!u.devTxt) return;
     if (u.devourCount > 0) {
@@ -1212,7 +1282,11 @@ Object.assign(GameScene.prototype, {
     if (u.hpFg && u.hpFg.active) u.hpFg.destroy();
     if (u.devTxt && u.devTxt.active) u.devTxt.destroy();
     for (const s of u.starImgs) if (s.active) s.destroy();
+    if (u.glow && u.glow.active) u.glow.destroy();
+    if (u.enchImg && u.enchImg.active) u.enchImg.destroy();
+    if (u.frozenFx && u.frozenFx.active) u.frozenFx.destroy();
     u.sprite = null; u.hpBg = null; u.hpFg = null; u.devTxt = null; u.starImgs = [];
+    u.glow = null; u.enchImg = null; u.frozenFx = null;
   },
   syncUnitVisual(u) {
     if (!u.sprite) return;
@@ -1224,6 +1298,8 @@ Object.assign(GameScene.prototype, {
     for (let i = 0; i < u.starImgs.length; i++) {
       u.starImgs[i].setVisible(onField).setPosition(u.x - (u.star - 1) * 7 + i * 14, u.y - 66);
     }
+    if (u.glow) u.glow.setVisible(u.side === 'player').setPosition(u.x, u.y);
+    if (u.enchImg) u.enchImg.setVisible(onField).setPosition(u.x + (u.star - 1) * 7 + 16, u.y - 66);
     this.updateDevText(u);
     if (u.devTxt) u.devTxt.setPosition(u.x, u.y + 52);
   },
@@ -1236,14 +1312,15 @@ Object.assign(GameScene.prototype, {
       phase: 'prep', wave: 1, gold: 8, level: 1, xp: 0, xpNeed: 2,
       towerHp: 100, baseGold: 5, interestCap: 5, rerolls: 0,
       speedMul: SETTINGS.speed, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
-      field: [], bench: [null, null, null, null, null], shop: [], enemies: [],
-      hitStopUntil: 0, dragUnit: null, diceBusy: false,
+      field: [], bench: [null, null, null, null, null], shop: [], shopEnch: null, enchHeld: null, freeReroll: 0, enemies: [],
+      hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false,
       stats: { startTime: Date.now(), kills: 0, goldEarned: 0 }
     });
     this.ui.speedTxt.setText(SETTINGS.speed + 'x');
     this.ui.endBox.setVisible(false);
     this.ui.hexBox.setVisible(false);
     this.ui.revealBox.setVisible(false);
+    this.ui.reinforceBox.setVisible(false);
     this.ui.pauseOverlay.setVisible(false);
     this.ui.settings.setVisible(false);
     this.ui.howto.setVisible(false);
@@ -1253,6 +1330,7 @@ Object.assign(GameScene.prototype, {
     this.addToBench(makeUnit('warrior', 'N', 'player'));
     this.addToBench(makeUnit('archer', 'N', 'player'));
     this.refreshShop(true);
+    this.renderEnchBar();
     this.updateTop();
     this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
     this.ui.startTxt.setText('开始战斗');
@@ -1265,7 +1343,7 @@ Object.assign(GameScene.prototype, {
     const cx = 496 + idx * 58, cy = 666;
     u.x = cx; u.y = cy;
     if (!u.sprite) this.spawnUnitSprite(u);
-    u.sprite.setScale(1.1).setTexture(u.tex + '_idle0');
+    u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
     this.syncUnitVisual(u);
     return idx;
   }
@@ -1301,7 +1379,22 @@ Object.assign(GameScene.prototype, {
     if (localX > 52) return null;
     return Math.floor((x - 470) / 58);
   },
+  unitAtPointAny(x, y) { // 场上 + 备战席（附魔拖放用）
+    for (const u of [...G.field, ...G.bench]) {
+      if (!u || !u.alive || !u.sprite) continue;
+      if (Math.abs(u.x - x) < 38 && Math.abs(u.y - y) < 42) return u;
+    }
+    return null;
+  },
   onDragStart(p, o) {
+    this._dragSX = p.x; this._dragSY = p.y;
+    if (o._enchSlot) { // 拖附魔栏里的附魔
+      if (!G.enchHeld || G.phase !== 'prep' || G.paused) return;
+      G.dragEnch = G.enchHeld;
+      const e = ENCHANTS[G.enchHeld];
+      this._enchGhost = this.add.image(p.x, p.y, 'spark').setTint(e.tint).setScale(2).setDepth(60);
+      return;
+    }
     const u = o._unit;
     if (!u || !u.alive || u.side !== 'player') return;
     if (G.phase !== 'prep' || G.paused) { G.dragUnit = null; return; }
@@ -1310,6 +1403,16 @@ Object.assign(GameScene.prototype, {
     o.setScale(o.scaleX * 1.15);
   },
   onDrag(p, o, x, y) {
+    if (G.dragEnch && this._enchGhost) { // 附魔拖放：跟随 + 悬停棋子绿光预告
+      this._enchGhost.setPosition(x, y);
+      this.clearDragHi();
+      const target = this.unitAtPointAny(x, y);
+      if (target) {
+        target.sprite.setTint(0x66ff66);
+        this._dragHi = target;
+      }
+      return;
+    }
     const u = G.dragUnit;
     if (!u || o._unit !== u) return;
     o.x = x; o.y = y;
@@ -1331,11 +1434,33 @@ Object.assign(GameScene.prototype, {
     }
   },
   onDragEnd(p, o) {
+    if (G.dragEnch) { // 附魔拖放结束
+      const enchId = G.dragEnch;
+      G.dragEnch = null;
+      if (this._enchGhost) { this._enchGhost.destroy(); this._enchGhost = null; }
+      const target = this.unitAtPointAny(p.x, p.y);
+      this.clearDragHi();
+      if (target && this.applyEnchant(target, enchId)) {
+        G.enchHeld = null;
+        this.renderEnchBar();
+        this.renderShop();
+      }
+      this.updateTop();
+      return;
+    }
     const u = G.dragUnit;
     G.dragUnit = null;
     if (!u) return;
     this.clearDragHi();
     this.updateTop();
+    // 单击（几乎没移动）= 打开强化面板，不走布阵逻辑
+    const moved = Math.hypot(p.x - (this._dragSX ?? p.x), p.y - (this._dragSY ?? p.y));
+    if (moved < 8 && G.phase === 'prep' && !G.paused) {
+      u.sprite.setScale(this.unitScale(u)); // 拖拽时放大了 1.15 倍，单击要复原
+      this.syncUnitVisual(u);
+      this.showReinforce(u);
+      return;
+    }
     const x = p.x, y = p.y;
     const bIdx = this.benchSlotAt(x, y);
     if (bIdx !== null) { this.moveToBench(u, bIdx); return; }
@@ -1368,7 +1493,7 @@ Object.assign(GameScene.prototype, {
     u.cell = cell;
     const pt = cellCenter(cell.c, cell.r);
     u.x = pt.x; u.y = pt.y;
-    u.sprite.setScale(u.baseScale).setTexture(u.tex + '_idle0');
+    u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
     this.syncUnitVisual(u);
     this.updateTop();
     return true;
@@ -1386,18 +1511,18 @@ Object.assign(GameScene.prototype, {
         occ.cell = oldCell;
         const pt = cellCenter(oldCell.c, oldCell.r);
         occ.x = pt.x; occ.y = pt.y;
-        occ.sprite.setScale(occ.baseScale).setTexture(occ.tex + '_idle0');
+        occ.sprite.setScale(this.unitScale(occ)).setTexture(occ.tex + '_idle0');
         this.syncUnitVisual(occ);
       } else { // 占位者换到拖动者原来的备战席格
         G.bench[oldBench] = occ;
         occ.x = 496 + oldBench * 58; occ.y = 666;
-        occ.sprite.setScale(1.1);
+        occ.sprite.setScale(this.unitScale(occ));
         this.syncUnitVisual(occ);
       }
     }
     G.bench[idx] = u;
     u.x = 496 + idx * 58; u.y = 666;
-    u.sprite.setScale(1.1).setTexture(u.tex + '_idle0');
+    u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
     this.syncUnitVisual(u);
     this.updateTop();
   },
@@ -1416,13 +1541,13 @@ Object.assign(GameScene.prototype, {
     G.bench[bi] = fieldU;
     fieldU.cell = null;
     fieldU.x = 496 + bi * 58; fieldU.y = 666;
-    fieldU.sprite.setScale(1.1).setTexture(fieldU.tex + '_idle0');
+    fieldU.sprite.setScale(this.unitScale(fieldU)).setTexture(fieldU.tex + '_idle0');
     this.syncUnitVisual(fieldU);
     G.field.push(benchU);
     benchU.cell = cell;
     const pt = cellCenter(cell.c, cell.r);
     benchU.x = pt.x; benchU.y = pt.y;
-    benchU.sprite.setScale(benchU.baseScale).setTexture(benchU.tex + '_idle0');
+    benchU.sprite.setScale(this.unitScale(benchU)).setTexture(benchU.tex + '_idle0');
     this.syncUnitVisual(benchU);
     this.updateTop();
   },
@@ -1473,6 +1598,7 @@ Object.assign(GameScene.prototype, {
   },
   refreshShop() {
     G.shop = [this.rollShopCard(), this.rollShopCard(), this.rollShopCard()];
+    G.shopEnch = this.rollEnchantCard();
     this.renderShop();
   },
   renderShop() {
@@ -1480,17 +1606,34 @@ Object.assign(GameScene.prototype, {
       const c = this.shopCards[i];
       const r = RARITY.find(x => x.key === card.rarity);
       c.border.setFillStyle(hexColor(r.color));
-      c.img.setTexture(CLASSES[card.cls].tex + '_idle0');
+      c.img.setTexture(CLASSES[card.cls].tex + '_idle0').clearTint().setAlpha(1).setScale(1.1);
       c.name.setText(CLASSES[card.cls].name + ' · ' + r.name).setColor(r.color);
       c.cost.setText(r.cost + '金');
+      c.tag.setVisible(false);
     });
+    // 第 4 张：附魔卡（金边 +「附魔」角标）
+    const ec = this.shopCards[3];
+    const e = G.shopEnch ? ENCHANTS[G.shopEnch] : null;
+    ec.border.setFillStyle(0xc9a227);
+    if (e) {
+      ec.img.setTexture('spark').setTint(e.tint).setAlpha(1).setScale(2.4);
+      ec.name.setText(e.name).setColor(e.color);
+      ec.cost.setText(e.cost + '金');
+      ec.tag.setVisible(true);
+    } else {
+      ec.img.setTexture('spark').setTint(0x5b5470).setAlpha(0.35).setScale(2.4);
+      ec.name.setText('（已购）').setColor('#8a84a0');
+      ec.cost.setText('');
+      ec.tag.setVisible(false);
+    }
+    ec.bg.setAlpha(G.enchHeld ? 0.45 : 1); // 附魔栏已占时置灰
   },
   buyShop(i) {
     if (G.phase !== 'prep') return;
     const card = G.shop[i]; if (!card) return;
     const r = RARITY.find(x => x.key === card.rarity);
-    if (G.gold < r.cost) { this.floatText(845 + i * 165, 500, '金币不足', '#ff8888', 13); return; }
-    if (G.bench.indexOf(null) === -1) { this.floatText(845 + i * 165, 500, '备战席满了', '#ff8888', 13); return; }
+    if (G.gold < r.cost) { this.floatText(829 + i * 122, 500, '金币不足', '#ff8888', 13); return; }
+    if (G.bench.indexOf(null) === -1) { this.floatText(829 + i * 122, 500, '备战席满了', '#ff8888', 13); return; }
     G.gold -= r.cost;
     const u = makeUnit(card.cls, card.rarity, 'player');
     this.addToBench(u);
@@ -1502,11 +1645,105 @@ Object.assign(GameScene.prototype, {
   },
   rerollShop() {
     if (G.phase !== 'prep') return;
-    const cost = 2 + G.rerolls;
-    if (G.gold < cost) { this.floatText(845, 640, '金币不足', '#ff8888', 13); return; }
-    G.gold -= cost; G.rerolls += 1;
+    let cost = 2 + G.rerolls;
+    let free = false;
+    if (G.freeReroll > 0) { free = true; G.freeReroll -= 1; } // DD街区：每波一次免费刷新
+    else if (G.buffs.goldenTicket && Math.random() < 0.25) { free = true; this.floatText(845, 640, '黄金门票！本次免费', '#c9a227', 13); }
+    if (!free) {
+      if (G.gold < cost) { this.floatText(845, 640, '金币不足', '#ff8888', 13); return; }
+      G.gold -= cost; G.rerolls += 1;
+    }
     this.refreshShop();
     SFX.click();
+    this.updateTop();
+  },
+
+  /* ---------- 附魔（M2） ---------- */
+  rollEnchantCard() {
+    const ids = Object.keys(ENCHANTS).filter(id => {
+      if (id === 'split') { // 分裂：场上+备战席没有远程棋子时不刷
+        return [...G.field, ...G.bench].some(u => u && (u.cls === 'archer' || u.cls === 'mage'));
+      }
+      return true;
+    });
+    return ids[Math.floor(Math.random() * ids.length)];
+  },
+  buyEnchant() {
+    if (G.phase !== 'prep') return;
+    const e = G.shopEnch ? ENCHANTS[G.shopEnch] : null;
+    if (!e) return;
+    if (G.enchHeld) { this.floatText(1195, 500, '先用掉手里的附魔', '#ff8888', 13); return; }
+    if (G.gold < e.cost) { this.floatText(1195, 500, '金币不足', '#ff8888', 13); return; }
+    G.gold -= e.cost;
+    G.enchHeld = e.id;
+    G.shopEnch = null; // 买走后该格变空，下次刷新再出
+    SFX.coin();
+    this.floatText(1195, 500, e.name + '附魔入手，拖到棋子身上', e.color, 13);
+    this.renderShop();
+    this.renderEnchBar();
+    this.updateTop();
+  },
+  renderEnchBar() {
+    const bar = this.ui.enchBar;
+    if (!bar) return;
+    if (G.enchHeld) {
+      const e = ENCHANTS[G.enchHeld];
+      bar.icon.setTexture('spark').setTint(e.tint).setVisible(true);
+      bar.label.setText(e.name + '附魔').setColor(e.color);
+    } else {
+      bar.icon.setVisible(false);
+      bar.label.setText('附魔栏（空）').setColor('#8a84a0');
+    }
+  },
+  applyEnchant(target, enchId) {
+    if (enchId === 'split' && target.cls === 'warrior') {
+      this.floatText(target.x, target.y - 46, '分裂只能给弓手/术士', '#ff8888', 13);
+      return false;
+    }
+    target.ench = enchId; // 再拖一个 = 替换，旧的消失
+    recompute(target);
+    this.refreshEnchVisual(target);
+    this.syncUnitVisual(target);
+    SFX.starup();
+    this.floatText(target.x, target.y - 56, ENCHANTS[enchId].name + '附魔！', ENCHANTS[enchId].color, 16);
+    return true;
+  },
+
+  /* ---------- 强化（M2：单击棋子面板） ---------- */
+  showReinforce(u) {
+    if (G.phase !== 'prep' || G.paused) return;
+    this._rfUnit = u;
+    this.refreshReinforcePanel();
+    this.ui.reinforceBox.setVisible(true);
+  },
+  refreshReinforcePanel() {
+    const u = this._rfUnit; const rf = this.ui.reinforceBox;
+    if (!u || !rf) return;
+    const cost = 3 + (u.reinforce || 0);
+    rf._title.setText(u.name + '　★' + u.star + '　Lv' + u.level);
+    const enchName = u.ench ? ENCHANTS[u.ench].name : '无';
+    rf._stats.setText(
+      '攻击 ' + u.atk + '　生命 ' + u.hp + '/' + u.maxHp + '\n' +
+      '攻速 ' + u.aspd.toFixed(2) + '/秒　暴击 ' + Math.round(u.crit * 100) + '%\n' +
+      '附魔：' + enchName + '　强化次数 ' + (u.reinforce || 0) + '\n' +
+      '吞噬 ' + u.devourCount + '/5　升星进度 ' + u.starProg + '/3');
+    rf._btnTxt.setText('强化 ' + cost + '金（攻/血+8%）');
+    const afford = G.gold >= cost;
+    rf._btnBg.setFillStyle(afford ? 0x3a3348 : 0x5b5470);
+    rf._btnBg.setAlpha(afford ? 1 : 0.6);
+  },
+  doReinforce() {
+    const u = this._rfUnit;
+    if (!u || !u.alive || G.phase !== 'prep') return;
+    const cost = 3 + (u.reinforce || 0);
+    if (G.gold < cost) { this.floatText(GW / 2, 200, '金币不足', '#ff8888', 14); return; }
+    G.gold -= cost;
+    u.reinforce = (u.reinforce || 0) + 1;
+    u.level += 1; // 走现有 lvlMult 曲线，和吞噬升级同一条 level
+    recompute(u);
+    SFX.starup();
+    this.floatText(u.x, u.y - 56, '强化！Lv' + u.level, '#6fb7d9', 18);
+    this.refreshReinforcePanel();
     this.updateTop();
   },
   buyXp() {
@@ -1635,8 +1872,9 @@ Object.assign(GameScene.prototype, {
     SFX.hexGold();
     this.ui.hexBox.setVisible(false);
     this.floatText(GW / 2, 200, '获得海克斯：' + h.name, TIER_COLOR[h.tier], 20);
-    for (const u of [...G.field, ...G.bench]) if (u) recompute(u);
+    for (const u of [...G.field, ...G.bench]) if (u) { recompute(u); if (u.sprite) u.sprite.setScale(this.unitScale(u)); }
     G.wave += 1; G.rerolls = 0;
+    if (G.buffs.ddFree) G.freeReroll = 1; // DD街区：新一波一次免费刷新
     this.refreshShop();
     G.phase = 'prep';
     this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
@@ -1694,13 +1932,15 @@ Object.assign(GameScene.prototype, {
     g.beginPath(); g.arc(x, y, 26, -2.2, -0.7); g.strokePath();
     this.tweens.add({ targets: g, alpha: 0, scaleX: 1.25, scaleY: 1.25, duration: 180, onComplete: () => g.destroy() });
   },
-  fireArrow(u, t, onHit) {
+  fireArrow(u, t, onHit, tint) {
     const a = this.add.image(u.x, u.y - 6, 'arrow').setDepth(6);
+    if (tint) a.setTint(tint);
     a.setRotation(Math.atan2(t.y - u.y, t.x - u.x));
     this.tweens.add({ targets: a, x: t.x, y: t.y - 6, duration: 150, onComplete: () => { onHit(); this.time.delayedCall(200, () => a.destroy()); } }); // 箭插在目标身上 0.2 秒
   },
-  fireOrb(u, t, onHit) {
+  fireOrb(u, t, onHit, tint) {
     const o = this.add.image(u.x, u.y - 10, 'orb').setDepth(6);
+    if (tint) o.setTint(tint);
     this.tweens.add({
       targets: o, x: t.x, y: t.y - 6, duration: 220,
       onUpdate: () => { if (Math.random() < 0.5) this.spawnParticles(o.x, o.y, 0x8b3fd9, 1, 30); },
@@ -1760,19 +2000,34 @@ Object.assign(GameScene.prototype, {
     for (const u of [...G.field, ...G.enemies]) {
       if (!u.alive || !u.sprite) continue;
       u.animT += dt;
+      // ---- M2：燃烧（每秒掉血） ----
+      if (u.burnUntil && time >= u.burnUntil) { u.burnUntil = 0; u.burnDps = 0; }
+      if (u.burnUntil && time >= (u.burnNext || 0)) {
+        u.burnNext = time + 1000;
+        u.hp -= u.burnDps;
+        this.floatText(u.x, u.y - 46, '-' + u.burnDps, '#d97b3f', 12);
+        this.spawnParticles(u.x, u.y - 10, 0xd97b3f, 3, 60);
+        this.syncHpBar(u);
+        if (u.hp <= 0) { this.killUnit(u); continue; }
+      }
+      // ---- M2：冻结（完全定住，不能动不能打） ----
+      if (u.frozenUntil && time >= u.frozenUntil) this.clearFreeze(u);
+      if (u.frozenUntil && time < u.frozenUntil) { this.setIdleFrame(u); this.syncHpBar(u); continue; }
       if (!u.target || !u.target.alive) u.target = this.acquireTarget(u);
       const t = u.target;
       if (!t) { this.setIdleFrame(u); continue; }
       const dx = t.x - u.x, dy = t.y - u.y;
       const dist = Math.hypot(dx, dy);
       const range = u.range + (t.isBoss ? 20 : 0) + (u.isBoss ? 10 : 0);
+      const slowed = time < (u.slowUntil || 0); // 寒霜：移速+攻速都减 30%
+      const sped = time < (u.speedBuffUntil || 0); // 速度恶魔：移速 +20%
       if (dist > range) {
-        const step = u.speed * dt;
+        const step = u.speed * (slowed ? 0.7 : 1) * (sped ? 1.2 : 1) * dt;
         u.x += dx / dist * step; u.y += dy / dist * step;
         u.sprite.setPosition(u.x, u.y);
         this.setWalkFrame(u);
       } else {
-        u.cd -= dt;
+        u.cd -= dt * (slowed ? 0.7 : 1);
         if (u.cd <= 0) { u.cd = 1 / u.aspd; this.doAttack(u, t); }
         this.setIdleFrame(u);
       }
@@ -1802,7 +2057,8 @@ Object.assign(GameScene.prototype, {
     if (u.sprite.texture.key !== key && this.time.now >= (u.poseUntil || 0)) {
       u.sprite.setTexture(key);
       // 走路弹跳：压低再弹回
-      this.tweens.add({ targets: u.sprite, scaleY: u.baseScale * 0.92, duration: 55, yoyo: true, onComplete: () => { if (u.sprite) u.sprite.setScale(u.baseScale); } });
+      const sc = this.unitScale(u);
+      this.tweens.add({ targets: u.sprite, scaleY: sc * 0.92, duration: 55, yoyo: true, onComplete: () => { if (u.sprite) u.sprite.setScale(sc); } });
     }
   },
   setIdleFrame(u) {
@@ -1830,23 +2086,27 @@ Object.assign(GameScene.prototype, {
       u.sprite.setTexture(u.tex + '_atk0');
       this.time.delayedCall(75, () => { if (u.alive && u.sprite && this.time.now < u.poseUntil) u.sprite.setTexture(u.tex + '_atk1'); });
       this.time.delayedCall(150, () => { if (u.alive && u.sprite && this.time.now < u.poseUntil) u.sprite.setTexture(u.tex + '_atk2'); });
-      this.tweens.add({ targets: u.sprite, scaleX: u.baseScale * 1.12, duration: 75, yoyo: true });
+      this.tweens.add({ targets: u.sprite, scaleX: this.unitScale(u) * 1.12, duration: 75, yoyo: true });
     }
     if (t.isTower) {
       this.time.delayedCall(90, () => { this.damageTower(u); this.hitSpark(TOWER_POS.x + 20, TOWER_POS.y, 0xd97b3f); });
       return;
     }
+    const enchTint = u.ench ? ENCHANT_TINT[u.ench] : null; // 附魔：武器/弹道换色
+    const split = u.ench === 'split' && (u.cls === 'archer' || u.cls === 'mage'); // 分裂：2 发各 60%
     if (u.cls === 'warrior') { // 战士：刀光弧 + 地面裂纹
       SFX.slash();
-      this.slashArc(t.x, t.y, 0xffffff);
+      this.slashArc(t.x, t.y, enchTint || 0xffffff);
       this.groundCrack(t.x, t.y);
       this.time.delayedCall(90, () => this.applyDamage(u, t, 1));
     } else if (u.cls === 'archer') { // 弓手：箭矢弹道（命中后插 0.2 秒）
       SFX.shoot();
-      this.fireArrow(u, t, () => this.applyDamage(u, t, 1));
+      this.fireArrow(u, t, () => this.applyDamage(u, t, split ? 0.6 : 1), enchTint);
+      if (split) this.time.delayedCall(120, () => { if (u.alive && t.alive) this.fireArrow(u, t, () => this.applyDamage(u, t, 0.6), enchTint); });
     } else if (u.cls === 'mage') { // 术士：法球 + 落点法环
       SFX.orb();
-      this.fireOrb(u, t, () => this.applyDamage(u, t, 1));
+      this.fireOrb(u, t, () => this.applyDamage(u, t, split ? 0.6 : 1), enchTint);
+      if (split) this.time.delayedCall(120, () => { if (u.alive && t.alive) this.fireOrb(u, t, () => this.applyDamage(u, t, 0.6), enchTint); });
     } else if (u.cls === 'boss') { // Boss：大剑劈砍 + 冲击波环，每 3 次骨刺 AoE
       SFX.slam();
       this.bossSlamFx(u, t);
@@ -1864,7 +2124,7 @@ Object.assign(GameScene.prototype, {
     if (!def.alive || !att.alive) return;
     let dmg = att.atk * mult;
     const isCrit = Math.random() < att.crit;
-    if (isCrit) dmg *= 2;
+    if (isCrit) dmg *= (G.buffs.pearl ? 2.5 : 2); // 珠光莲花：暴伤 2→2.5 倍
     dmg = Math.max(1, Math.round(dmg));
     def.hp -= dmg;
     def.poseUntil = this.time.now + 150;
@@ -1873,7 +2133,8 @@ Object.assign(GameScene.prototype, {
       this.tweens.add({ targets: def.sprite, angle: -8, duration: 80, yoyo: true, onComplete: () => { if (def.sprite) def.sprite.setAngle(0); } }); // 受击后仰
     }
     this.floatText(def.x + (Math.random() * 20 - 10), def.y - 46, String(dmg), isCrit ? '#c9a227' : '#ffffff', isCrit ? 26 : 16, isCrit);
-    const sparkColor = att.cls === 'warrior' ? 0xffffff : att.cls === 'archer' ? 0x3fae6a : att.cls === 'mage' ? 0x8b3fd9 : att.cls === 'boss' ? 0xd97b3f : 0x3fae6a;
+    const sparkColor = att.ench ? ENCHANT_TINT[att.ench] // 附魔：命中火花换对应色
+      : att.cls === 'warrior' ? 0xffffff : att.cls === 'archer' ? 0x3fae6a : att.cls === 'mage' ? 0x8b3fd9 : att.cls === 'boss' ? 0xd97b3f : 0x3fae6a;
     this.hitSpark(def.x, def.y - 6, sparkColor);
     if (isCrit) {
       SFX.crit();
@@ -1881,8 +2142,101 @@ Object.assign(GameScene.prototype, {
       this.hitStop(90);
       this.starburst(def.x, def.y - 10);
     } else SFX.hit();
+    // 飞身踢：直接处决生命低于 15% 的敌人
+    if (G.buffs.execute && att.side === 'player' && def.hp > 0 && def.hp / def.maxHp < 0.15) {
+      def.hp = 0;
+      this.floatText(def.x, def.y - 66, '处决！', '#c9a227', 20);
+      this.killUnit(def);
+      this.syncHpBar(def);
+      return;
+    }
+    if (def.hp > 0) this.applyHitEffects(att, def, dmg);
     this.syncHpBar(def);
     if (def.hp <= 0) this.killUnit(def);
+  },
+  /* ---------- M2：命中后效果（附魔 + 海克斯） ---------- */
+  applyHitEffects(att, def, dmg) {
+    const now = this.time.now;
+    if (G.buffs.speedDemon && att.side === 'player') att.speedBuffUntil = now + 2000; // 速度恶魔
+    if (att.side === 'player' && att.ench) {
+      const immune = def.side === 'player' && G.buffs.colossus; // 巨像免疫减速/冻结
+      switch (att.ench) {
+        case 'fire': // 烈焰：点燃 3 点/秒 × 3 秒（刷新不叠加）
+          def.burnUntil = now + 3000; def.burnDps = 3; def.burnNext = now + 1000;
+          break;
+        case 'frost': // 寒霜：减速 30% × 2 秒
+          if (!immune) def.slowUntil = now + 2000;
+          break;
+        case 'freeze': // 冰冻：10% 概率冻结 1.5 秒
+          if (!immune && Math.random() < 0.10) this.applyFreeze(def);
+          break;
+        case 'storm': // 雷霆：25% 概率闪电链
+          if (Math.random() < 0.25) this.tryChain(att, def, dmg);
+          break;
+        case 'vamp': { // 吸血：15% 回血
+          const heal = Math.max(1, Math.round(dmg * 0.15));
+          att.hp = Math.min(att.maxHp, att.hp + heal);
+          this.floatText(att.x, att.y - 56, '+' + heal, '#3fae6a', 13);
+          this.syncHpBar(att);
+          break;
+        }
+        default: break;
+      }
+    }
+    // 弹跳：远程攻击命中后弹跳到附近敌人（40% 伤害）
+    if (G.buffs.bounce && att.side === 'player' && (att.cls === 'archer' || att.cls === 'mage')) this.tryBounce(att, def, dmg);
+  },
+  nearestOtherFoe(att, around, maxDist) {
+    const foes = att.side === 'player' ? G.enemies : G.field;
+    let best = null, bestD = maxDist;
+    for (const e of foes) {
+      if (!e.alive || e === around) continue;
+      const d = Math.hypot(e.x - around.x, e.y - around.y);
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    return best;
+  },
+  chainFx(x1, y1, x2, y2, color) { // 折线闪电 / 弹跳弧线
+    const g = this.add.graphics().setDepth(8);
+    g.lineStyle(3, color, 0.95);
+    const mx = (x1 + x2) / 2 + (Math.random() * 20 - 10), my = (y1 + y2) / 2 + (Math.random() * 20 - 10);
+    g.beginPath(); g.moveTo(x1, y1); g.lineTo(mx, my); g.lineTo(x2, y2); g.strokePath();
+    this.tweens.add({ targets: g, alpha: 0, duration: 250, onComplete: () => g.destroy() });
+  },
+  dealBonusDamage(src, def, amount, tint, textColor) { // 链式/弹跳附加伤害（不递归触发）
+    if (!def.alive) return;
+    amount = Math.max(1, Math.round(amount));
+    def.hp -= amount;
+    def.poseUntil = this.time.now + 120;
+    if (def.sprite) def.sprite.setTexture(def.tex + '_hit');
+    this.floatText(def.x + (Math.random() * 16 - 8), def.y - 46, String(amount), textColor, 14);
+    this.hitSpark(def.x, def.y - 6, tint);
+    this.syncHpBar(def);
+    if (def.hp <= 0) this.killUnit(def);
+  },
+  tryChain(att, def, dmg) {
+    const t = this.nearestOtherFoe(att, def, 150);
+    if (!t) return;
+    SFX.zap();
+    this.chainFx(def.x, def.y - 10, t.x, t.y - 10, 0xe3cf9e);
+    this.dealBonusDamage(att, t, dmg * 0.5, 0xe3cf9e, '#e3cf9e');
+  },
+  tryBounce(att, def, dmg) {
+    const t = this.nearestOtherFoe(att, def, 150);
+    if (!t) return;
+    this.chainFx(def.x, def.y - 10, t.x, t.y - 10, 0x8b3fd9);
+    this.dealBonusDamage(att, t, dmg * 0.4, 0x8b3fd9, '#c9a227');
+  },
+  applyFreeze(u) {
+    u.frozenUntil = this.time.now + 1500;
+    if (u.sprite) u.sprite.setTint(0x9fd8ef);
+    if (!u.frozenFx) u.frozenFx = this.add.image(u.x, u.y - 68, 'spark').setTint(0xffffff).setScale(1.2).setDepth(5);
+    u.frozenFx.setVisible(true).setPosition(u.x, u.y - 68);
+  },
+  clearFreeze(u) {
+    u.frozenUntil = 0;
+    if (u.sprite) u.sprite.clearTint();
+    if (u.frozenFx) u.frozenFx.setVisible(false);
   },
   damageTower(u) {
     const dmg = Math.max(1, Math.round(u.atk));
@@ -1894,18 +2248,30 @@ Object.assign(GameScene.prototype, {
     if (G.towerHp <= 0) this.endWave(false);
   },
   killUnit(u) {
-    u.alive = false; u.hp = 0;
-    if (u.sprite) { this.tweens.killTweensOf(u.sprite); u.sprite.setTexture(u.tex + '_die'); }
+    u.alive = false; u.hp = 0; u.frozenUntil = 0;
+    if (u.sprite) { this.tweens.killTweensOf(u.sprite); u.sprite.clearTint(); u.sprite.setTexture(u.tex + '_die'); }
     this.spawnParticles(u.x, u.y, u.side === 'player' ? 0xcfc9dd : 0x3fae6a, u.isBoss ? 30 : 12, 160);
     if (u.side === 'enemy') {
       if (G.stats) G.stats.kills += 1;
       this.coinDrop(u.x, u.y); // 敌人死亡掉金币（纯视觉，不加经济）
+      if (G.buffs.soul) { // 吞噬灵魂：每击杀一个敌人，全队生命 +2（本局叠加）
+        for (const p of [...G.field, ...G.bench]) {
+          if (!p || !p.alive) continue;
+          p.soulBonus = (p.soulBonus || 0) + 2;
+          p.maxHp += 2;
+          p.hp = Math.min(p.maxHp, p.hp + 2);
+          this.syncHpBar(p);
+        }
+      }
     }
     if (u.isBoss) { this.shake(400, 0.02); this.hitStop(150); SFX.win(); }
     if (u.hpBg) u.hpBg.setVisible(false);
     if (u.hpFg) u.hpFg.setVisible(false);
     for (const s of u.starImgs) s.setVisible(false);
     if (u.devTxt) u.devTxt.setVisible(false);
+    if (u.frozenFx) u.frozenFx.setVisible(false);
+    if (u.glow) u.glow.setVisible(false);
+    if (u.enchImg) u.enchImg.setVisible(false);
     if (u.sprite) this.tweens.add({ targets: u.sprite, alpha: 0, duration: 500, delay: 350, onComplete: () => { if (u.sprite) u.sprite.setVisible(false); } });
     if (u.side === 'player') G.field = G.field.filter(x => x !== u);
   },
@@ -1916,6 +2282,7 @@ Object.assign(GameScene.prototype, {
     if (G.field.length === 0) { this.floatText(GW / 2, 200, '先拖至少 1 个棋子上场', '#ff8888', 16); return; }
     this.saveGame(); // 开打前存档：继续时回到本波备战
     this.ui.tutBox.setVisible(false); markTutDone(); // 新手引导完成
+    this.ui.reinforceBox.setVisible(false);
     BGM.setMode(G.wave === 5 ? 'boss' : 'normal');
     G.phase = 'battle';
     this.ui.startBtn.setVisible(false); this.ui.startTxt.setVisible(false);
@@ -1966,6 +2333,7 @@ Object.assign(GameScene.prototype, {
     this.time.delayedCall(1200, () => {
       if (G.phase !== 'settle') return;
       G.wave += 1; G.rerolls = 0;
+      if (G.buffs.ddFree) G.freeReroll = 1; // DD街区：新一波一次免费刷新
       this.refreshShop();
       G.phase = 'prep';
       this.ui.startBtn.setVisible(true); this.ui.startTxt.setVisible(true);
@@ -2026,7 +2394,7 @@ Object.assign(GameScene.prototype, {
       wave: G.wave, gold: G.gold, level: G.level, xp: G.xp, xpNeed: G.xpNeed,
       towerHp: G.towerHp, buffs: G.buffs, hexesTaken: G.hexesTaken, packPity: G.packPity,
       field: G.field.map(u => snapUnit(u)), bench: G.bench.map(u => u ? snapUnit(u) : null),
-      shop: G.shop
+      shop: G.shop, enchHeld: G.enchHeld || null, shopEnch: G.shopEnch || null, freeReroll: G.freeReroll || 0
     };
     try { localStorage.setItem('syjt_save_v1', JSON.stringify(snap)); } catch (e) {}
   },
@@ -2043,13 +2411,17 @@ Object.assign(GameScene.prototype, {
       towerHp: snap.towerHp, buffs: snap.buffs || {}, hexesTaken: snap.hexesTaken || [], packPity: snap.packPity || 0
     });
     G.shop = snap.shop && snap.shop.length ? snap.shop : G.shop;
+    G.enchHeld = snap.enchHeld || null;
+    G.shopEnch = snap.shopEnch || null;
+    G.freeReroll = snap.freeReroll || 0;
     (snap.field || []).forEach(su => {
       const u = restoreUnit(su);
       const pt = cellCenter(su.cell.c, su.cell.r);
       G.field.push(u); u.cell = su.cell; u.x = pt.x; u.y = pt.y;
       this.spawnUnitSprite(u);
-      u.sprite.setScale(u.baseScale).setTexture(u.tex + '_idle0');
+      u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
       this.refreshStars(u);
+      this.refreshEnchVisual(u);
       this.syncUnitVisual(u);
     });
     (snap.bench || []).forEach((su, i) => {
@@ -2057,11 +2429,13 @@ Object.assign(GameScene.prototype, {
       const u = restoreUnit(su);
       G.bench[i] = u; u.cell = null; u.x = 496 + i * 58; u.y = 666;
       this.spawnUnitSprite(u);
-      u.sprite.setScale(1.1).setTexture(u.tex + '_idle0');
+      u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
       this.refreshStars(u);
+      this.refreshEnchVisual(u);
       this.syncUnitVisual(u);
     });
     this.renderShop();
+    this.renderEnchBar();
     this.updateTop();
   }
 });
@@ -2096,7 +2470,7 @@ class MenuScene extends Phaser.Scene {
     menuBtn(this, GW / 2, 460, 260, 52, '玩法说明', () => this._howto.setVisible(true), 22);
     menuBtn(this, GW / 2, 530, 260, 52, '设置', () => this._settings.setVisible(true), 22);
     this.add.text(GW / 2, 600, best > 0 ? '最高波次：第 ' + best + ' 波 / 5' : '最高波次：—', { fontSize: '16px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
-    this.add.text(GW - 16, GH - 16, 'v0.2', { fontSize: '14px', color: '#5b5470', fontFamily: 'monospace' }).setOrigin(1, 1);
+    this.add.text(GW - 16, GH - 16, 'v0.3', { fontSize: '14px', color: '#5b5470', fontFamily: 'monospace' }).setOrigin(1, 1);
     this._settings = createSettingsOverlay(this, 60);
     this._howto = createHowToOverlay(this, 60);
     this.input.on('pointerdown', () => SFX.ac());
