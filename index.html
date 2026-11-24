@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>噬运军团 · v0.5</title>
+<title>噬运军团 · v0.6</title>
 <link rel="icon" href="data:,">
 <style>
   html, body { margin: 0; padding: 0; background: #0b0910; height: 100%; overflow: hidden; }
@@ -20,9 +20,9 @@
 <script>
 'use strict';
 /* ============================================================
-   噬运军团 · v0.5（M4：骰子遗物 + 遗物铺 + 底部图标栏）
-   Phaser 4.2.1（jsdelivr CDN，唯一外部资源）
-   所有美术：代码在 canvas 上逐像素画的精灵（48x48，Boss 64x64，12 帧/角色）
+   噬运军团 · v0.6（M5 P0：战士 16 帧精灵表 + 战场背景重渲染）
+   Phaser 4.2.1（jsdelivr CDN）+ 本地 PNG（assets/*-64.png 7 角色 64 级精灵表、assets/fieldbg-b2.png 战场背景、assets/effects/*-64.png 3 条特效）
+   其余角色仍是代码在 canvas 上逐像素画的精灵（48x48，Boss 64x64，12 帧/角色）
    音效：WebAudio 合成 SFX + 循环 BGM，无外部音频
    ============================================================ */
 if (!window.Phaser) { document.getElementById('fallback').style.display = 'block'; }
@@ -202,6 +202,14 @@ function mulberry32(seed) {
    画法：先在 32 格（Boss 48 格）逐像素画，再最近邻放大到 48x48（Boss 64x64）
    ============================================================ */
 const FRAMES12 = ['idle0', 'idle1', 'w0', 'w1', 'w2', 'w3', 'atk0', 'atk1', 'atk2', 'hit', 'die', 'win'];
+/* M5 P1：7 角色 64 级精灵表（assets/*-64.png，4x4，每帧 64x64，Boss 96x96）
+   帧号：待机 0-3 / 走路 4-7 / 攻击 8-11 / 受击 12 / 死亡 13 / 胜利 14 / 施法 15 */
+const SHEET64 = { idle0: 0, idle1: 1, idle2: 2, idle3: 3, w0: 4, w1: 5, w2: 6, w3: 7, atk0: 8, atk1: 9, atk2: 10, atk3: 11, hit: 12, die: 13, win: 14, cast: 15 };
+const SHEET_KEY = { warrior: 'warrior64', archer: 'archer64', mage: 'mage64', slime: 'slime64', bat: 'bat64', boss: 'boss64' };
+function sheetKeyFor(u) { // 精英史莱姆用自己的表；其余按 tex
+  if (u.tex === 'slime' && u.isElite) return 'elite-slime64';
+  return SHEET_KEY[u.tex] || null;
+}
 function buildChar(scene, key, drawFn, baseSize, finalSize) {
   for (const suf of FRAMES12) {
     if (scene.textures.exists(key + '_' + suf)) continue;
@@ -943,15 +951,15 @@ function createHowToOverlay(scene, depth) {
   const title = scene.add.text(GW / 2, 150, '玩法说明', { fontSize: '30px', color: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
   c.add([panel, title]);
   const steps = [
-    { tex: 'warrior_idle0', head: '1. 拖棋子上场', body: '把备战席的棋子拖到战场格子里' },
-    { tex: 'archer_idle0', head: '2. 点开始战斗', body: '布好阵就开打，战斗全自动' },
-    { tex: 'mage_idle0', head: '3. 海克斯三选一', body: '每打赢第 3 波，挑一个强化' },
-    { tex: 'slime_idle0', head: '4. 吞噬进化', body: '把棋子拖到场上同伴身上吞噬升星' },
-    { tex: 'boss_idle0', head: '5. 守住水晶塔', body: '塔破了就输了，撑过 5 波获胜' }
+    { tex: 'warrior64', head: '1. 拖棋子上场', body: '把备战席的棋子拖到战场格子里' },
+    { tex: 'archer64', head: '2. 点开始战斗', body: '布好阵就开打，战斗全自动' },
+    { tex: 'mage64', head: '3. 海克斯三选一', body: '每打赢第 3 波，挑一个强化' },
+    { tex: 'slime64', head: '4. 吞噬进化', body: '把棋子拖到场上同伴身上吞噬升星' },
+    { tex: 'boss64', head: '5. 守住水晶塔', body: '塔破了就输了，撑过 5 波获胜' }
   ];
   steps.forEach((s, i) => {
     const y = 210 + i * 72;
-    const icon = scene.add.image(GW / 2 - 280, y, s.tex).setScale(1.4);
+    const icon = scene.add.image(GW / 2 - 280, y, s.tex, 0).setScale(s.tex === 'boss64' ? 0.7 : 1.05);
     const head = scene.add.text(GW / 2 - 240, y - 14, s.head, { fontSize: '18px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0, 0.5);
     const body = scene.add.text(GW / 2 - 240, y + 12, s.body, { fontSize: '15px', color: '#cfc9dd', fontFamily: 'monospace' }).setOrigin(0, 0.5);
     c.add([icon, head, body]);
@@ -964,6 +972,19 @@ function createHowToOverlay(scene, depth) {
 /* ---------------- 场景骨架（方法在后面以 prototype 挂接） ---------------- */
 class GameScene extends Phaser.Scene {
   constructor() { super('Game'); }
+  preload() { // M5 P1：7 角色 64 级精灵表 + 战场背景 + 3 条特效（加载失败时各使用点回退旧路线）
+    this.load.spritesheet('warrior64', 'assets/warrior-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('archer64', 'assets/archer-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('mage64', 'assets/mage-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('slime64', 'assets/slime-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('elite-slime64', 'assets/elite-slime-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('bat64', 'assets/bat-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('boss64', 'assets/boss-64.png', { frameWidth: 96, frameHeight: 96 });
+    this.load.image('fieldbg', 'assets/fieldbg-b2.png');
+    this.load.spritesheet('fx-slime64', 'assets/effects/slime-splat-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('fx-bat64', 'assets/effects/bat-swipe-64.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.image('fx-bone64', 'assets/effects/bone-spike-64.png');
+  }
   create() {
     buildAllTextures(this);
     this.buildTopBar();
@@ -982,6 +1003,20 @@ class GameScene extends Phaser.Scene {
     this.scale.on('resize', () => {});
   }
   update(time, delta) { this.tick(time, delta); }
+  /* M5 P1：64 级精灵表 helpers（7 角色全用表；加载失败时回退旧代码纹理） */
+  useSheet(u) { const k = sheetKeyFor(u); return k && this.textures.exists(k) ? k : null; }
+  setUnitFrame(u, suf) { // suf: 'idle0'|'w2'|'atk1'|'hit'|'die'|'win'；返回是否真的换了帧
+    if (!u.sprite) return false;
+    const key = this.useSheet(u);
+    if (key) {
+      const f = SHEET64[suf];
+      if (u._sheetFrame !== f || u.sprite.texture.key !== key) { u._sheetFrame = f; u.sprite.setTexture(key, f); return true; }
+      return false;
+    }
+    const key2 = u.tex + '_' + suf;
+    if (u.sprite.texture.key !== key2) { u.sprite.setTexture(key2); return true; }
+    return false;
+  }
 }
 
 /* ============================================================
@@ -1034,18 +1069,29 @@ Object.assign(GameScene.prototype, {
     this.mkBtn(1200, 12, 56, 32, '？', () => { this.ui.howto.setVisible(true); }, 16);
   },
 
+  setCellHi(cell, on) { // 拖拽格子高亮：有背景图时用半透明绿罩，无背景时用旧棋盘色
+    const rc = this.cellRects[cell.c][cell.r];
+    if (this._hasBg) { rc.setFillStyle(0x3fae6a); rc.setAlpha(on ? 0.45 : 0); }
+    else rc.setFillStyle(on ? 0x3fae6a : ((cell.c + cell.r) % 2 === 0 ? 0x245c39 : 0x1e5233));
+  },
+
   buildField() {
-    // 草地棋盘（双色像素砖）+ 固定种子装饰（每局同图）
-    this.add.rectangle(16, 64, 1248, 416, 0x1e5233).setOrigin(0, 0);
+    // M5 P1：战场背景改用重渲染的像素图（assets/fieldbg-b2.png）；加载失败时回退旧的色块棋盘
+    const hasBg = this.textures.exists('fieldbg');
+    this._hasBg = hasBg;
+    if (hasBg) this.add.image(0, 0, 'fieldbg').setOrigin(0, 0).setDepth(-1);
+    else this.add.rectangle(16, 64, 1248, 416, 0x1e5233).setOrigin(0, 0);
     this.cellRects = [];
     for (let c = 0; c < GRID.cols; c++) {
       this.cellRects[c] = [];
       for (let r = 0; r < GRID.rows; r++) {
         const col = (c + r) % 2 === 0 ? 0x245c39 : 0x1e5233;
         const rect = this.add.rectangle(GRID.x + c * GRID.cw, GRID.y + r * GRID.ch, GRID.cw - 2, GRID.ch - 2, col).setOrigin(0, 0).setDepth(0);
+        if (hasBg) rect.setAlpha(0); // 背景图已画好草地，格子只留作拖拽高亮层
         this.cellRects[c][r] = rect;
       }
     }
+    if (!hasBg) { // 旧色块棋盘装饰（背景图已包含草地/栅栏/旗帜/裂缝，跳过）
     const rng = mulberry32(20261124);
     for (let c = 0; c < GRID.cols; c++) {
       for (let r = 0; r < GRID.rows; r++) {
@@ -1085,6 +1131,7 @@ Object.assign(GameScene.prototype, {
       this.add.triangle(1200, ry, 0, 0, 26, 10, 0, 22, 0x241f30).setOrigin(0, 0).setDepth(1);
       this.add.circle(1216, ry + 10, 3, 0x8b3fd9).setDepth(1).setAlpha(0.7);
     }
+    } // end if (!hasBg)
     // 波次氛围罩（白天 / 黄昏 / Boss 夜）
     this.atmo = this.add.rectangle(16, 64, 1248, 416, 0x000000, 0).setOrigin(0, 0).setDepth(1);
     this.fogBlobs = [];
@@ -1115,7 +1162,7 @@ Object.assign(GameScene.prototype, {
       const k = diceKeys[Math.floor(Math.random() * 3)];
       const die = this.add.container(cx, cy).setDepth(1);
       const face = this.add.rectangle(0, 0, 52, 52, 0xf2ead8).setStrokeStyle(2, 0x14101c);
-      const img = this.add.image(0, 0, k + '_idle0').setScale(0.75);
+      const img = this.add.image(0, 0, SHEET_KEY[k], 0).setScale(0.6);
       const pip1 = this.add.circle(-20, -20, 3, 0x14101c);
       const pip2 = this.add.circle(20, 20, 3, 0x14101c);
       die.add([face, img, pip1, pip2]);
@@ -1146,13 +1193,13 @@ Object.assign(GameScene.prototype, {
     }
     // ---- 右：商店（M2：3 张棋子卡 + 1 张附魔卡） ----
     this.add.text(770, 506, '商店', { fontSize: '15px', color: '#e3cf9e', fontFamily: 'monospace', fontStyle: 'bold' });
-    this.add.text(820, 509, '每波免费刷新', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
+    this.add.text(870, 509, '每波免费刷新', { fontSize: '12px', color: '#8a84a0', fontFamily: 'monospace' });
     this.shopCards = [];
     for (let i = 0; i < 4; i++) {
       const x = 770 + i * 122;
       const border = this.add.rectangle(x, 516, 118, 120, 0xcfc9dd).setOrigin(0, 0);
       const bg = this.add.rectangle(x + 2, 518, 114, 116, 0x14101c).setOrigin(0, 0).setInteractive();
-      const img = this.add.image(x + 59, 566, 'warrior_idle0').setScale(1.1).setDepth(1);
+      const img = this.add.image(x + 59, 566, 'warrior64', 0).setScale(0.85).setDepth(1);
       const name = this.add.text(x + 59, 606, '', { fontSize: '13px', color: '#f2ead8', fontFamily: 'monospace' }).setOrigin(0.5, 0);
       const cost = this.add.text(x + 59, 622, '', { fontSize: '12px', color: '#e3cf9e', fontFamily: 'monospace' }).setOrigin(0.5, 0);
       const tag = this.add.text(x + 6, 520, '附魔', { fontSize: '11px', color: '#14101c', backgroundColor: '#c9a227', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0, 0).setDepth(2).setVisible(false);
@@ -1299,7 +1346,7 @@ Object.assign(GameScene.prototype, {
     // 开包揭示弹层
     const rev = this.add.container(0, 0).setDepth(40).setVisible(false);
     rev.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0));
-    rev._img = this.add.image(GW / 2, 300, 'warrior_idle0').setScale(3);
+    rev._img = this.add.image(GW / 2, 300, 'warrior64', 0).setScale(2.25);
     rev._name = this.add.text(GW / 2, 420, '', { fontSize: '26px', color: '#f2ead8', fontFamily: 'monospace', fontStyle: 'bold' }).setOrigin(0.5);
     rev._rar = this.add.text(GW / 2, 460, '', { fontSize: '18px', color: '#c9a227', fontFamily: 'monospace' }).setOrigin(0.5);
     rev.add([rev._img, rev._name, rev._rar]);
@@ -1368,7 +1415,11 @@ Object.assign(GameScene.prototype, {
 
   /* ---------- 单位可视化 ---------- */
   spawnUnitSprite(u) {
-    const img = this.add.image(u.x, u.y, u.tex + '_idle0').setScale(this.unitScale(u)).setDepth(3);
+    const sheet = this.useSheet(u);
+    const img = sheet
+      ? this.add.image(u.x, u.y, sheet, 0).setScale(this.unitScale(u)).setDepth(3)
+      : this.add.image(u.x, u.y, u.tex + '_idle0').setScale(this.unitScale(u)).setDepth(3);
+    u._sheetFrame = sheet ? 0 : -1;
     if (u.side === 'player') img.setInteractive({ draggable: true }); // 只有玩家棋子能拖；敌人不可拖
     img._unit = u;
     u.sprite = img;
@@ -1388,6 +1439,12 @@ Object.assign(GameScene.prototype, {
     }
   },
   unitScale(u) { // 巨像：场上体型 +35%；备战席不放大（52 格装不下）
+    if (this.useSheet(u)) {
+      // M5 P1：64 级帧 64x64（Boss 96x96）；场上 96px、备战 48px，显示尺寸和旧版一致
+      const f = u.tex === 'boss' ? (64 / 96) : 0.75;
+      if (u.side === 'enemy') return u.baseScale * f;
+      return u.cell ? u.baseScale * (G.buffs.colossus ? 1.35 : 1) * f : f;
+    }
     if (u.side === 'enemy') return u.baseScale;
     if (!u.cell) return 1.1;
     return u.baseScale * (G.buffs.colossus ? 1.35 : 1);
@@ -1482,7 +1539,7 @@ Object.assign(GameScene.prototype, {
     const cx = 496 + idx * 58, cy = 666;
     u.x = cx; u.y = cy;
     if (!u.sprite) this.spawnUnitSprite(u);
-    u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
+    u.sprite.setScale(this.unitScale(u)); this.setUnitFrame(u, 'idle0');
     this.syncUnitVisual(u);
     return idx;
   }
@@ -1500,7 +1557,7 @@ Object.assign(GameScene.prototype, {
     this._dragHi = null;
     if (this._dragHiCell) {
       const cell = this._dragHiCell;
-      this.cellRects[cell.c][cell.r].setFillStyle((cell.c + cell.r) % 2 === 0 ? 0x245c39 : 0x1e5233);
+      this.setCellHi(cell, false);
       this._dragHiCell = null;
     }
   },
@@ -1568,7 +1625,7 @@ Object.assign(GameScene.prototype, {
     }
     const cell = cellAt(x, y);
     if (cell && !this.unitAtCell(cell.c, cell.r)) {
-      this.cellRects[cell.c][cell.r].setFillStyle(0x3fae6a);
+      this.setCellHi(cell, true);
       this._dragHiCell = cell;
     }
   },
@@ -1632,7 +1689,7 @@ Object.assign(GameScene.prototype, {
     u.cell = cell;
     const pt = cellCenter(cell.c, cell.r);
     u.x = pt.x; u.y = pt.y;
-    u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
+    u.sprite.setScale(this.unitScale(u)); this.setUnitFrame(u, 'idle0');
     this.syncUnitVisual(u);
     this.updateTop();
     return true;
@@ -1650,7 +1707,7 @@ Object.assign(GameScene.prototype, {
         occ.cell = oldCell;
         const pt = cellCenter(oldCell.c, oldCell.r);
         occ.x = pt.x; occ.y = pt.y;
-        occ.sprite.setScale(this.unitScale(occ)).setTexture(occ.tex + '_idle0');
+        occ.sprite.setScale(this.unitScale(occ)); this.setUnitFrame(occ, 'idle0');
         this.syncUnitVisual(occ);
       } else { // 占位者换到拖动者原来的备战席格
         G.bench[oldBench] = occ;
@@ -1661,7 +1718,7 @@ Object.assign(GameScene.prototype, {
     }
     G.bench[idx] = u;
     u.x = 496 + idx * 58; u.y = 666;
-    u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
+    u.sprite.setScale(this.unitScale(u)); this.setUnitFrame(u, 'idle0');
     this.syncUnitVisual(u);
     this.updateTop();
   },
@@ -1680,13 +1737,13 @@ Object.assign(GameScene.prototype, {
     G.bench[bi] = fieldU;
     fieldU.cell = null;
     fieldU.x = 496 + bi * 58; fieldU.y = 666;
-    fieldU.sprite.setScale(this.unitScale(fieldU)).setTexture(fieldU.tex + '_idle0');
+    fieldU.sprite.setScale(this.unitScale(fieldU)); this.setUnitFrame(fieldU, 'idle0');
     this.syncUnitVisual(fieldU);
     G.field.push(benchU);
     benchU.cell = cell;
     const pt = cellCenter(cell.c, cell.r);
     benchU.x = pt.x; benchU.y = pt.y;
-    benchU.sprite.setScale(this.unitScale(benchU)).setTexture(benchU.tex + '_idle0');
+    benchU.sprite.setScale(this.unitScale(benchU)); this.setUnitFrame(benchU, 'idle0');
     this.syncUnitVisual(benchU);
     this.updateTop();
   },
@@ -1745,7 +1802,7 @@ Object.assign(GameScene.prototype, {
       const c = this.shopCards[i];
       const r = RARITY.find(x => x.key === card.rarity);
       c.border.setFillStyle(hexColor(r.color));
-      c.img.setTexture(CLASSES[card.cls].tex + '_idle0').clearTint().setAlpha(1).setScale(1.1);
+      c.img.setTexture(SHEET_KEY[CLASSES[card.cls].tex], 0).clearTint().setAlpha(1).setScale(0.85);
       c.name.setText(CLASSES[card.cls].name + ' · ' + r.name).setColor(r.color);
       c.cost.setText(r.cost + '金');
       c.tag.setVisible(false);
@@ -1969,14 +2026,14 @@ Object.assign(GameScene.prototype, {
       u.target = null; u.cd = 0;
       if (u.sprite) {
         this.tweens.killTweensOf(u.sprite);
-        u.sprite.setVisible(true).setAlpha(1).clearTint().setTexture(u.tex + '_idle0');
+        u.sprite.setVisible(true).setAlpha(1).clearTint(); this.setUnitFrame(u, 'idle0');
       }
       if (cellFree) {
         const pt = cellCenter(cell.c, cell.r);
         u.x = pt.x; u.y = pt.y;
         G.field.push(u);
         if (!u.sprite) this.spawnUnitSprite(u);
-        u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
+        u.sprite.setScale(this.unitScale(u)); this.setUnitFrame(u, 'idle0');
         this.refreshStars(u); this.refreshEnchVisual(u);
         this.syncUnitVisual(u); this.syncHpBar(u);
       } else {
@@ -2053,7 +2110,7 @@ Object.assign(GameScene.prototype, {
         SFX.click();
         this.dice.forEach((die, di) => {
           const k = this.pickDiceFace(di);
-          die._cls = k; die._img.setTexture(k + '_idle0');
+          die._cls = k; die._img.setTexture(SHEET_KEY[k], 0);
           die.setAngle(Math.random() * 24 - 12);
           die.y = 578 + (Math.random() * 8 - 4);
         });
@@ -2128,7 +2185,7 @@ Object.assign(GameScene.prototype, {
     const best = got.slice().sort((a, b) => RARITY.findIndex(x => x.key === b.rarity) - RARITY.findIndex(x => x.key === a.rarity))[0];
     const r = RARITY.find(x => x.key === best.rarity);
     const rev = this.ui.revealBox;
-    rev._img.setTexture(CLASSES[best.cls].tex + '_idle0');
+    rev._img.setTexture(SHEET_KEY[CLASSES[best.cls].tex], 0);
     rev._name.setText(CLASSES[best.cls].name);
     rev._rar.setText(r.name + (best.rarity === 'SSR' ? '！！' : '')).setColor(r.color);
     rev.setVisible(true);
@@ -2256,6 +2313,19 @@ Object.assign(GameScene.prototype, {
     this.tweens.add({ targets: s, scaleX: 2.2, scaleY: 2.2, alpha: 0, duration: 180, onComplete: () => s.destroy() });
     this.spawnParticles(x, y, color, 5, 90);
   },
+  showHitFx(att, def) { // M5 P1：敌人攻击特效（史莱姆溅射 / 蝙蝠挥击 / Boss 骨刺）
+    const m = { slime: ['fx-slime64', 4], bat: ['fx-bat64', 3], boss: ['fx-bone64', 0] }[att.cls];
+    if (!m || !this.textures.exists(m[0])) return;
+    if (!m[1]) { // 骨刺：单图，放目标脚下淡出
+      const img = this.add.image(def.x, def.y + 28, m[0]).setDepth(7).setScale(1.2);
+      this.tweens.add({ targets: img, alpha: 0, duration: 350, onComplete: () => img.destroy() });
+      return;
+    }
+    const img = this.add.image(def.x, def.y - 6, m[0], 0).setDepth(7).setScale(1.2);
+    let f = 0;
+    const timer = this.time.addEvent({ delay: 60, repeat: m[1] - 1, callback: () => { f++; if (img.active && f < m[1]) img.setFrame(f); } });
+    this.time.delayedCall(60 * m[1] + 80, () => { timer.remove(false); if (img.active) img.destroy(); });
+  },
   starburst(x, y) {
     this.spawnParticles(x, y, 0xc9a227, 16, 170);
     const r = this.add.circle(x, y, 10).setStrokeStyle(3, 0xc9a227).setDepth(7);
@@ -2314,7 +2384,7 @@ Object.assign(GameScene.prototype, {
           const dmg = Math.max(1, Math.round(u.atk * 0.5));
           p.hp -= dmg;
           p.poseUntil = this.time.now + 150;
-          if (p.sprite) p.sprite.setTexture(p.tex + '_hit');
+          if (p.sprite) this.setUnitFrame(p, 'hit');
           this.floatText(p.x, p.y - 46, String(dmg), '#ff8888', 16);
           this.hitSpark(p.x, p.y - 6, 0xa83232);
           if (p.hp <= 0) this.killUnit(p);
@@ -2394,9 +2464,7 @@ Object.assign(GameScene.prototype, {
   },
   setWalkFrame(u) {
     const idx = Math.floor(u.animT / 0.1) % 4;
-    const key = u.tex + '_w' + idx;
-    if (u.sprite.texture.key !== key && this.time.now >= (u.poseUntil || 0)) {
-      u.sprite.setTexture(key);
+    if (this.time.now >= (u.poseUntil || 0) && this.setUnitFrame(u, 'w' + idx)) {
       // 走路弹跳：压低再弹回
       const sc = this.unitScale(u);
       this.tweens.add({ targets: u.sprite, scaleY: sc * 0.92, duration: 55, yoyo: true, onComplete: () => { if (u.sprite) u.sprite.setScale(sc); } });
@@ -2404,8 +2472,11 @@ Object.assign(GameScene.prototype, {
   },
   setIdleFrame(u) {
     if (this.time.now >= (u.poseUntil || 0)) {
-      const key = u.tex + (Math.floor(u.animT / 0.6) % 2 === 0 ? '_idle0' : '_idle1'); // 待机眨眼
-      if (u.sprite.texture.key !== key) u.sprite.setTexture(key);
+      if (this.useSheet(u)) this.setUnitFrame(u, 'idle' + (Math.floor(u.animT / 0.3) % 4)); // 64 级表 4 帧待机：眨眼 + 呼吸
+      else {
+        const key = u.tex + (Math.floor(u.animT / 0.6) % 2 === 0 ? '_idle0' : '_idle1'); // 待机眨眼
+        if (u.sprite.texture.key !== key) u.sprite.setTexture(key);
+      }
     }
   },
   syncHpBar(u) {
@@ -2421,12 +2492,14 @@ Object.assign(GameScene.prototype, {
   /* ---------- 攻击（按角色区分特效） ---------- */
   doAttack(u, t) {
     u.atkCount += 1;
-    u.poseUntil = this.time.now + 220;
+    const sheet = this.useSheet(u);
+    u.poseUntil = this.time.now + (sheet ? 300 : 220);
     if (u.sprite) {
-      // 攻击三段帧：蓄力 → 挥出 → 收势（12 张/秒）
-      u.sprite.setTexture(u.tex + '_atk0');
-      this.time.delayedCall(75, () => { if (u.alive && u.sprite && this.time.now < u.poseUntil) u.sprite.setTexture(u.tex + '_atk1'); });
-      this.time.delayedCall(150, () => { if (u.alive && u.sprite && this.time.now < u.poseUntil) u.sprite.setTexture(u.tex + '_atk2'); });
+      // 攻击帧：蓄力 → 挥出 → 收势（12 张/秒）；战士精灵表 4 段，多一段 atk3
+      this.setUnitFrame(u, 'atk0');
+      this.time.delayedCall(75, () => { if (u.alive && u.sprite && this.time.now < u.poseUntil) this.setUnitFrame(u, 'atk1'); });
+      this.time.delayedCall(150, () => { if (u.alive && u.sprite && this.time.now < u.poseUntil) this.setUnitFrame(u, 'atk2'); });
+      if (sheet) this.time.delayedCall(225, () => { if (u.alive && u.sprite && this.time.now < u.poseUntil) this.setUnitFrame(u, 'atk3'); });
       this.tweens.add({ targets: u.sprite, scaleX: this.unitScale(u) * 1.12, duration: 75, yoyo: true });
     }
     if (t.isTower) {
@@ -2470,13 +2543,14 @@ Object.assign(GameScene.prototype, {
     def.hp -= dmg;
     def.poseUntil = this.time.now + 150;
     if (def.sprite) {
-      def.sprite.setTexture(def.tex + '_hit');
+      this.setUnitFrame(def, 'hit');
       this.tweens.add({ targets: def.sprite, angle: -8, duration: 80, yoyo: true, onComplete: () => { if (def.sprite) def.sprite.setAngle(0); } }); // 受击后仰
     }
     this.floatText(def.x + (Math.random() * 20 - 10), def.y - 46, String(dmg), isCrit ? '#c9a227' : '#ffffff', isCrit ? 26 : 16, isCrit);
     const sparkColor = att.ench ? ENCHANT_TINT[att.ench] // 附魔：命中火花换对应色
       : att.cls === 'warrior' ? 0xffffff : att.cls === 'archer' ? 0x3fae6a : att.cls === 'mage' ? 0x8b3fd9 : att.cls === 'boss' ? 0xd97b3f : 0x3fae6a;
     this.hitSpark(def.x, def.y - 6, sparkColor);
+    this.showHitFx(att, def);
     if (isCrit) {
       SFX.crit();
       this.shake(140, 0.012);
@@ -2549,7 +2623,7 @@ Object.assign(GameScene.prototype, {
     amount = Math.max(1, Math.round(amount));
     def.hp -= amount;
     def.poseUntil = this.time.now + 120;
-    if (def.sprite) def.sprite.setTexture(def.tex + '_hit');
+    if (def.sprite) this.setUnitFrame(def, 'hit');
     this.floatText(def.x + (Math.random() * 16 - 8), def.y - 46, String(amount), textColor, 14);
     this.hitSpark(def.x, def.y - 6, tint);
     this.syncHpBar(def);
@@ -2590,7 +2664,7 @@ Object.assign(GameScene.prototype, {
   },
   killUnit(u) {
     u.alive = false; u.hp = 0; u.frozenUntil = 0;
-    if (u.sprite) { this.tweens.killTweensOf(u.sprite); u.sprite.clearTint(); u.sprite.setTexture(u.tex + '_die'); }
+    if (u.sprite) { this.tweens.killTweensOf(u.sprite); u.sprite.clearTint(); this.setUnitFrame(u, 'die'); }
     this.spawnParticles(u.x, u.y, u.side === 'player' ? 0xcfc9dd : 0x3fae6a, u.isBoss ? 30 : 12, 160);
     if (u.side === 'enemy') {
       if (G.stats) G.stats.kills += 1;
@@ -2648,8 +2722,8 @@ Object.assign(GameScene.prototype, {
           if (G.phase !== 'battle') return;
           this.spawnUnitSprite(e);
           e.sprite.setFlipX(true);
-          e.sprite.setScale(e.baseScale);
-          e.sprite.setTexture(e.tex + '_idle0');
+          e.sprite.setScale(this.unitScale(e));
+          this.setUnitFrame(e, 'idle0');
           this.syncHpBar(e);
           this.spawnParticles(e.x, e.y, 0x8b3fd9, 8, 100);
           if (e.isBoss) this.bossIntro();
@@ -2696,7 +2770,7 @@ Object.assign(GameScene.prototype, {
     saveBest(G.wave);
     clearSave();
     if (win) { // 胜利姿势
-      for (const u of [...G.field]) if (u.alive && u.sprite) u.sprite.setTexture(u.tex + '_win');
+      for (const u of [...G.field]) if (u.alive && u.sprite) this.setUnitFrame(u, 'win');
     }
     const secs = G.stats ? Math.floor((Date.now() - G.stats.startTime) / 1000) : 0;
     const stats = '用时 ' + Math.floor(secs / 60) + '分' + (secs % 60) + '秒　击杀 ' + (G.stats ? G.stats.kills : 0) + '　获得金币 ' + (G.stats ? G.stats.goldEarned : 0) + '\n最高波次 ' + loadBest() + ' / 5　等级 Lv' + G.level + '　海克斯 ' + G.hexesTaken.length + ' 个';
@@ -2773,7 +2847,7 @@ Object.assign(GameScene.prototype, {
       const pt = cellCenter(su.cell.c, su.cell.r);
       G.field.push(u); u.cell = su.cell; u.x = pt.x; u.y = pt.y;
       this.spawnUnitSprite(u);
-      u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
+      u.sprite.setScale(this.unitScale(u)); this.setUnitFrame(u, 'idle0');
       this.refreshStars(u);
       this.refreshEnchVisual(u);
       this.syncUnitVisual(u);
@@ -2783,7 +2857,7 @@ Object.assign(GameScene.prototype, {
       const u = restoreUnit(su);
       G.bench[i] = u; u.cell = null; u.x = 496 + i * 58; u.y = 666;
       this.spawnUnitSprite(u);
-      u.sprite.setScale(this.unitScale(u)).setTexture(u.tex + '_idle0');
+      u.sprite.setScale(this.unitScale(u)); this.setUnitFrame(u, 'idle0');
       this.refreshStars(u);
       this.refreshEnchVisual(u);
       this.syncUnitVisual(u);
@@ -2833,7 +2907,7 @@ class MenuScene extends Phaser.Scene {
     menuBtn(this, GW / 2, 460, 260, 52, '玩法说明', () => this._howto.setVisible(true), 22);
     menuBtn(this, GW / 2, 530, 260, 52, '设置', () => this._settings.setVisible(true), 22);
     this.add.text(GW / 2, 600, best > 0 ? '最高波次：第 ' + best + ' 波 / 5' : '最高波次：—', { fontSize: '16px', color: '#8a84a0', fontFamily: 'monospace' }).setOrigin(0.5);
-    this.add.text(GW - 16, GH - 16, 'v0.5', { fontSize: '14px', color: '#5b5470', fontFamily: 'monospace' }).setOrigin(1, 1);
+    this.add.text(GW - 16, GH - 16, 'v0.6', { fontSize: '14px', color: '#5b5470', fontFamily: 'monospace' }).setOrigin(1, 1);
     this._settings = createSettingsOverlay(this, 60);
     this._howto = createHowToOverlay(this, 60);
     this.input.on('pointerdown', () => SFX.ac());
