@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>噬运军团 · v0.8</title>
+<title>噬运军团 · v0.9</title>
 <link rel="icon" href="data:,">
 <style>
   @font-face {
@@ -27,7 +27,7 @@
 <script>
 'use strict';
 /* ============================================================
-   噬运军团 · v0.8（M6：水晶塔参战 + 战后继续/撤退）
+   噬运军团 · v0.9（M5 §9：敌人详情 + 全队伤害排行）
    Phaser 4.2.1（jsdelivr CDN）+ 本地 PNG（assets/*-64.png 7 角色 64 级精灵表、assets/p2/ 田园背景/水晶塔/羊皮纸 UI、assets/effects/*-64.png 3 条特效）
    其余角色仍是代码在 canvas 上逐像素画的精灵（48x48，Boss 64x64，12 帧/角色）
    音效：WebAudio 合成 SFX + 循环 BGM，无外部音频
@@ -845,7 +845,7 @@ const G = {
   speedMul: 1, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
   field: [], bench: [null, null, null, null, null], shop: [], shopEnch: null, enchHeld: null, freeReroll: 0, enemies: [],
   hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false,
-  rested: false, freeDice: true, fallen: [],
+  rested: false, freeDice: true, fallen: [], lastWaveRank: [],
   relics: [], bellUsed: false, previewFace: null // M4：已购遗物 / 本波铃已触发 / 共鸣镜预见（瞬态，不存档）
 };
 
@@ -864,7 +864,8 @@ function makeUnit(cls, rarityKey, side) {
     starImgs: [], devTxt: null, atkCount: 0, baseScale: side === 'enemy' ? 2 : 2,
     // ---- M2：附魔 / 强化 / 战斗减益 ----
     ench: null, reinforce: 0, soulBonus: 0,
-    burnUntil: 0, burnDps: 0, burnNext: 0, slowUntil: 0, frozenUntil: 0, speedBuffUntil: 0,
+    dmgDealtWave: 0, dmgTakenWave: 0, dmgDealtTotal: 0, dmgTakenTotal: 0, // M5 §9：伤害统计（瞬态，不进存档）
+    burnUntil: 0, burnDps: 0, burnNext: 0, burnSrc: null, slowUntil: 0, frozenUntil: 0, speedBuffUntil: 0,
     enchImg: null, glow: null, frozenFx: null
   };
   return u;
@@ -1127,6 +1128,7 @@ Object.assign(GameScene.prototype, {
     else { this.add.circle(352, 24, 7, 0xc9a227); this.add.circle(352, 24, 3, 0x8a6d1f); }
     this.ui.goldTxt = this.add.text(370, 24, '金币 8', { fontSize: '16px', color: '#e3cf9e', fontFamily: FONT }).setOrigin(0, 0.5);
     this.ui.popTxt = this.add.text(480, 24, '人口 0/4', { fontSize: '16px', color: '#f2ead8', fontFamily: FONT }).setOrigin(0, 0.5);
+    this.mkBtn(552, 8, 36, 32, '战绩', () => { if (G.phase === 'prep' && !G.paused) this.showRankPanel(null); }, 13); // M5 §9：备战看战绩
     if (this.textures.exists('icon-heart')) this.add.image(600, 24, 'icon-heart').setDisplaySize(28, 28);
     else this.add.text(600, 24, '塔', { fontSize: '16px', color: '#f2ead8', fontFamily: FONT }).setOrigin(0, 0.5);
     this.add.rectangle(625, 16, 140, 16, 0x5e1f24).setOrigin(0, 0);
@@ -1504,6 +1506,52 @@ Object.assign(GameScene.prototype, {
     rdCloseBg.on('pointerdown', () => { SFX.click(); rd.setVisible(false); });
     rd.add([rd._title, rd._icon, rd._desc, rd._status, rdCloseBg, rdCloseTxt]);
     this.ui.relicDetail = rd;
+    // M5 §9：敌人详情（战斗中点敌人弹出：名字·品阶 + 图标 + 三行属性）
+    const ed = this.add.container(0, 0).setDepth(46).setVisible(false);
+    const edBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
+    edBg.on('pointerdown', () => ed.setVisible(false));
+    const edPanel = this.textures.exists('panel-360x240')
+      ? this.add.image(GW / 2, GH / 2, 'panel-360x240').setInteractive()
+      : this.add.rectangle(GW / 2, GH / 2, 360, 240, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
+    ed.add([edBg, edPanel]);
+    ed._title = this.add.text(GW / 2, 268, '', { fontSize: '22px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+    ed._icon = this.add.image(GW / 2, 305, 'slime64', 0).setScale(0.5);
+    ed._stats = this.add.text(GW / 2, 340, '', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT, align: 'center', lineSpacing: 8 }).setOrigin(0.5, 0);
+    const edCloseBg = this.textures.exists('btn-parchment')
+      ? this.add.image(GW / 2, 450, 'btn-parchment').setDisplaySize(120, 36).setInteractive()
+      : this.add.rectangle(GW / 2, 450, 120, 36, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const edCloseTxt = this.add.text(GW / 2, 450, '关闭', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
+    edCloseBg.on('pointerdown', () => { SFX.click(); ed.setVisible(false); });
+    ed.add([ed._title, ed._icon, ed._stats, edCloseBg, edCloseTxt]);
+    this.ui.enemyDetail = ed;
+    // M5 §9：战绩面板（输出/承伤两栏，本波 + 整局各最多 4 行）
+    const rk = this.add.container(0, 0).setDepth(46).setVisible(false);
+    const rkBg = this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0).setInteractive();
+    rkBg.on('pointerdown', () => this.hideRankPanel());
+    const rkPanel = this.textures.exists('panel-520x420')
+      ? this.add.image(GW / 2, GH / 2, 'panel-520x420').setInteractive()
+      : this.add.rectangle(GW / 2, GH / 2, 520, 420, 0x241f30).setStrokeStyle(2, 0xc9a227).setInteractive();
+    rk.add([rkBg, rkPanel]);
+    rk._title = this.add.text(GW / 2, 180, '战绩', { fontSize: '24px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+    const mkTab = (cx, label, tab) => {
+      const b = this.add.rectangle(cx, 225, 130, 36, 0x6e4f3a).setInteractive().setStrokeStyle(1, 0xc9a227);
+      const t = this.add.text(cx, 225, label, { fontSize: '16px', color: '#f2ead8', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0.5);
+      b.on('pointerdown', () => { SFX.click(); this._rankTab = tab; this.renderRankRows(); });
+      rk.add([b, t]);
+      return { bg: b, txt: t };
+    };
+    rk._tabDmg = mkTab(565, '输出排行', 'dmg');
+    rk._tabTaken = mkTab(715, '承伤排行', 'taken');
+    rk._waveLbl = this.add.text(400, 262, '本波', { fontSize: '16px', color: '#8a6d1f', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0, 0.5);
+    rk._totalLbl = this.add.text(400, 398, '整局', { fontSize: '16px', color: '#8a6d1f', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0, 0.5);
+    const rkCloseBg = this.textures.exists('btn-parchment')
+      ? this.add.image(GW / 2, 540, 'btn-parchment').setDisplaySize(160, 40).setInteractive()
+      : this.add.rectangle(GW / 2, 540, 160, 40, 0x3a3348).setInteractive().setStrokeStyle(1, 0xc9a227);
+    const rkCloseTxt = this.add.text(GW / 2, 540, '关闭', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
+    rkCloseBg.on('pointerdown', () => { SFX.click(); this.hideRankPanel(); });
+    rk.add([rk._title, rk._waveLbl, rk._totalLbl, rkCloseBg, rkCloseTxt]);
+    rk._closeBg = rkCloseBg; rk._closeTxt = rkCloseTxt;
+    this.ui.rankBox = rk;
     // 开包揭示弹层
     const rev = this.add.container(0, 0).setDepth(40).setVisible(false);
     rev.add(this.add.rectangle(0, 0, GW, GH, 0x000000, 0.55).setOrigin(0, 0));
@@ -1583,6 +1631,7 @@ Object.assign(GameScene.prototype, {
       : this.add.image(u.x, u.y, u.tex + '_idle0').setScale(this.unitScale(u)).setDepth(3);
     u._sheetFrame = sheet ? 0 : -1;
     if (u.side === 'player') img.setInteractive({ draggable: true }); // 只有玩家棋子能拖；敌人不可拖
+    else img.setInteractive({ useHandCursor: true }).on('pointerdown', () => { if (G.phase === 'battle' && !G.paused && u.alive) this.showEnemyDetail(u); }); // M5 §9：战斗中点敌人看详情
     img._unit = u;
     u.sprite = img;
     u.hpBg = this.add.rectangle(u.x, u.y - 54, 56, 6, 0x5e1f24).setDepth(4).setVisible(false);
@@ -1666,7 +1715,7 @@ Object.assign(GameScene.prototype, {
       speedMul: SETTINGS.speed, paused: false, buffs: {}, hexesTaken: [], packPity: 0,
       field: [], bench: [null, null, null, null, null], shop: [], shopEnch: null, enchHeld: null, freeReroll: 0, enemies: [],
       hitStopUntil: 0, dragUnit: null, dragEnch: null, diceBusy: false,
-      rested: false, freeDice: true, fallen: [],
+      rested: false, freeDice: true, fallen: [], lastWaveRank: [],
       relics: [], bellUsed: false, previewFace: null, // M4
       stats: { startTime: Date.now(), kills: 0, goldEarned: 0 }
     });
@@ -1680,6 +1729,8 @@ Object.assign(GameScene.prototype, {
     this.ui.reinforceBox.setVisible(false);
     if (this.ui.towerBox) this.ui.towerBox.setVisible(false);
     if (this.ui.choiceBox) this.ui.choiceBox.setVisible(false);
+    if (this.ui.enemyDetail) this.ui.enemyDetail.setVisible(false);
+    if (this.ui.rankBox) this.ui.rankBox.setVisible(false);
     this.ui.pauseOverlay.setVisible(false);
     this.ui.settings.setVisible(false);
     this.ui.howto.setVisible(false);
@@ -2086,6 +2137,83 @@ Object.assign(GameScene.prototype, {
     d._status.setText(st);
     d.setVisible(true);
     SFX.click();
+  },
+  /* ---------- M5 §9：敌人详情 + 战绩面板 ---------- */
+  showEnemyDetail(e) {
+    if (!e || !e.alive) return;
+    const d = this.ui.enemyDetail;
+    if (!d) return;
+    const rank = e.isBoss ? 'Boss' : e.isElite ? '精英' : '普通';
+    d._title.setText(e.name + ' · ' + rank);
+    const key = sheetKeyFor(e);
+    if (key && this.textures.exists(key)) d._icon.setTexture(key, 0);
+    else if (this.textures.exists(e.tex + '_idle0')) d._icon.setTexture(e.tex + '_idle0');
+    d._icon.setScale(e.tex === 'boss' ? 0.35 : 0.5);
+    const trait = e.isBoss ? 'Boss：攻高血厚' : e.isElite ? '生命×2　攻击×1.5' : e.cls === 'bat' ? '高速' : '成群出现';
+    d._stats.setText(
+      '生命 ' + Math.max(0, Math.round(e.hp)) + '/' + e.maxHp + '　攻击 ' + e.atk + '\n' +
+      '攻速 ' + e.aspd + '/秒　移速 ' + e.speed + '\n' +
+      '特性：' + trait);
+    d.setVisible(true);
+    SFX.click();
+  },
+  showRankPanel(onClose) {
+    const rk = this.ui.rankBox;
+    if (!rk) return;
+    this._rankOnClose = onClose || null;
+    this._rankTab = 'dmg';
+    rk._title.setText(this._rankOnClose ? '第 ' + G.wave + ' 波战绩' : '战绩');
+    this.renderRankRows();
+    rk.setVisible(true);
+    SFX.click();
+  },
+  hideRankPanel() {
+    const rk = this.ui.rankBox;
+    if (rk) rk.setVisible(false);
+    if (this._rankOnClose) { const cb = this._rankOnClose; this._rankOnClose = null; cb(); } // 只调一次
+  },
+  renderRankRows() {
+    const rk = this.ui.rankBox;
+    if (!rk) return;
+    for (const el of (this._rankRowEls || [])) { if (el && el.active) el.destroy(); }
+    this._rankRowEls = [];
+    const addRow = el => { rk.add(el); this._rankRowEls.push(el); return el; };
+    const setTab = (tab, active) => { tab.bg.setFillStyle(active ? 0xc9a227 : 0x6e4f3a); tab.txt.setColor(active ? '#3a2a1c' : '#f2ead8'); };
+    setTab(rk._tabDmg, this._rankTab === 'dmg');
+    setTab(rk._tabTaken, this._rankTab === 'taken');
+    const tab = this._rankTab || 'dmg';
+    const rowsFor = kind => {
+      let rows;
+      if (kind === 'wave') {
+        rows = (G.lastWaveRank || []).map(e => ({ name: e.name, tex: e.tex, isElite: !!e.isElite, star: e.star || 1, val: tab === 'dmg' ? (e.dmgDealt || 0) : (e.dmgTaken || 0) }));
+      } else {
+        rows = [...G.field, ...G.bench.filter(u => u), ...G.fallen].map(u => ({ name: u.name, tex: u.tex, isElite: !!u.isElite, star: u.star || 1, val: tab === 'dmg' ? (u.dmgDealtTotal || 0) : (u.dmgTakenTotal || 0) }));
+      }
+      return rows.filter(r => r.val > 0).sort((a, b) => (b.val - a.val) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).slice(0, 4);
+    };
+    const drawSection = (rows, y0) => {
+      if (!rows.length) {
+        addRow(this.add.text(GW / 2, y0, '暂无数据', { fontSize: '15px', color: '#8a6d1f', fontFamily: FONT }).setOrigin(0.5, 0.5));
+        return;
+      }
+      const colors = ['#c9a227', '#cfc9dd', '#d97b3f', '#8a84a0'];
+      rows.forEach((row, i) => {
+        const y = y0 + i * 26;
+        addRow(this.add.text(405, y, String(i + 1), { fontSize: '16px', color: colors[i], fontFamily: FONT, fontStyle: 'bold' }).setOrigin(0, 0.5));
+        const key = sheetKeyFor(row);
+        let icon;
+        if (key && this.textures.exists(key)) icon = this.add.image(445, y, key, 0);
+        else if (this.textures.exists(row.tex + '_idle0')) icon = this.add.image(445, y, row.tex + '_idle0');
+        else icon = this.add.image(445, y, 'warrior64', 0);
+        icon.setScale(row.tex === 'boss' ? 0.35 : 0.5);
+        addRow(icon);
+        addRow(this.add.text(470, y, row.name + (row.star > 1 ? ' ★' + row.star : ''), { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0, 0.5));
+        addRow(this.add.text(870, y, String(row.val), { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT, fontStyle: 'bold' }).setOrigin(1, 0.5));
+      });
+    };
+    drawSection(rowsFor('wave'), 288);
+    drawSection(rowsFor('total'), 424);
+    rk._closeTxt.setText(this._rankOnClose ? '继续' : '关闭');
   },
   applyEnchant(target, enchId) {
     if (enchId === 'split' && target.cls === 'warrior') {
@@ -2608,6 +2736,9 @@ Object.assign(GameScene.prototype, {
       if (u.burnUntil && time >= (u.burnNext || 0)) {
         u.burnNext = time + 1000;
         u.hp -= u.burnDps;
+        // M5 §9：点燃伤害计入来源输出
+        if (u.burnSrc && u.burnSrc.side === 'player') { u.burnSrc.dmgDealtWave = (u.burnSrc.dmgDealtWave || 0) + u.burnDps; u.burnSrc.dmgDealtTotal = (u.burnSrc.dmgDealtTotal || 0) + u.burnDps; }
+        if (u.side === 'player') { u.dmgTakenWave = (u.dmgTakenWave || 0) + u.burnDps; u.dmgTakenTotal = (u.dmgTakenTotal || 0) + u.burnDps; }
         this.floatText(u.x, u.y - 46, '-' + u.burnDps, '#d97b3f', 12);
         this.spawnParticles(u.x, u.y - 10, 0xd97b3f, 3, 60);
         this.syncHpBar(u);
@@ -2769,6 +2900,9 @@ Object.assign(GameScene.prototype, {
     if (isCrit) dmg *= (G.buffs.pearl ? 2.5 : 2); // 珠光莲花：暴伤 2→2.5 倍
     dmg = Math.max(1, Math.round(dmg));
     def.hp -= dmg;
+    // M5 §9：伤害统计（只累计，不改数值；塔 side:'tower' 不进棋子输出）
+    if (att.side === 'player') { att.dmgDealtWave = (att.dmgDealtWave || 0) + dmg; att.dmgDealtTotal = (att.dmgDealtTotal || 0) + dmg; }
+    if (def.side === 'player') { def.dmgTakenWave = (def.dmgTakenWave || 0) + dmg; def.dmgTakenTotal = (def.dmgTakenTotal || 0) + dmg; }
     def.poseUntil = this.time.now + 150;
     if (def.sprite) {
       this.setUnitFrame(def, 'hit');
@@ -2806,7 +2940,7 @@ Object.assign(GameScene.prototype, {
       const immune = def.side === 'player' && G.buffs.colossus; // 巨像免疫减速/冻结
       switch (att.ench) {
         case 'fire': // 烈焰：点燃 3 点/秒 × 3 秒（刷新不叠加）
-          def.burnUntil = now + 3000; def.burnDps = 3; def.burnNext = now + 1000;
+          def.burnUntil = now + 3000; def.burnDps = 3; def.burnNext = now + 1000; def.burnSrc = att;
           break;
         case 'frost': // 寒霜：减速 30% × 2 秒
           if (!immune) def.slowUntil = now + 2000;
@@ -2851,6 +2985,9 @@ Object.assign(GameScene.prototype, {
     if (!def.alive) return;
     amount = Math.max(1, Math.round(amount));
     def.hp -= amount;
+    // M5 §9：链式/弹跳附加伤害也计入统计
+    if (src.side === 'player') { src.dmgDealtWave = (src.dmgDealtWave || 0) + amount; src.dmgDealtTotal = (src.dmgDealtTotal || 0) + amount; }
+    if (def.side === 'player') { def.dmgTakenWave = (def.dmgTakenWave || 0) + amount; def.dmgTakenTotal = (def.dmgTakenTotal || 0) + amount; }
     def.poseUntil = this.time.now + 120;
     if (def.sprite) this.setUnitFrame(def, 'hit');
     this.floatText(def.x + (Math.random() * 16 - 8), def.y - 46, String(amount), textColor, 14);
@@ -2936,6 +3073,10 @@ Object.assign(GameScene.prototype, {
     if (this.ui.choiceBox) this.ui.choiceBox.setVisible(false);
     BGM.setMode(G.wave === 5 ? 'boss' : 'normal');
     G.phase = 'battle';
+    // M5 §9：每波开打，本波统计清零（整局累计不清）；隐藏敌人详情/战绩面板
+    for (const u of G.field) { u.dmgDealtWave = 0; u.dmgTakenWave = 0; }
+    if (this.ui.enemyDetail) this.ui.enemyDetail.setVisible(false);
+    if (this.ui.rankBox) this.ui.rankBox.setVisible(false);
     this.ui.startBtn.setVisible(false); this.ui.startTxt.setVisible(false);
     SFX.tone(220, 0.15, 'sawtooth', 0.10, 440);
     this.updateTop();
@@ -2988,9 +3129,16 @@ Object.assign(GameScene.prototype, {
     if (G.stats) G.stats.goldEarned += gain;
     SFX.coin();
     this.floatText(GW / 2, 200, '第 ' + G.wave + ' 波胜利！+' + gain + '金（基础' + G.baseGold + ' 胜利2 利息' + interest + '）', '#e3cf9e', 18);
-    if (G.wave === 5) { this.time.delayedCall(1200, () => this.gameOver(true)); return; }
-    // M6：胜利后先二选一（继续 / 撤退），选了才走海克斯 / 遗物 / 备战
-    this.time.delayedCall(1200, () => { if (G.phase === 'settle') this.showWinChoice(); });
+    // M5 §9：胜利后先弹战绩面板，关了再走 M6 二选一 / 第 5 波结算
+    this.time.delayedCall(1200, () => {
+      if (G.phase !== 'settle') return;
+      // 快照本波排行（单位死后进 fallen，数字还在）
+      G.lastWaveRank = [...G.field, ...G.fallen]
+        .filter(u => u && ((u.dmgDealtWave || 0) > 0 || (u.dmgTakenWave || 0) > 0))
+        .map(u => ({ name: u.name, tex: u.tex, isElite: !!u.isElite, star: u.star, dmgDealt: u.dmgDealtWave || 0, dmgTaken: u.dmgTakenWave || 0 }));
+      if (G.wave === 5) this.showRankPanel(() => this.gameOver(true));
+      else this.showRankPanel(() => this.showWinChoice());
+    });
   },
   afterWinContinue() { // 二选一之后：波 3 海克斯 / 波 2·4 遗物铺 / 其余直接推进
     if (G.wave === 3) { this.showHex(); return; }
@@ -3189,7 +3337,7 @@ class MenuScene extends Phaser.Scene {
     menuBtn(this, GW / 2, 460, 260, 52, '玩法说明', () => this._howto.setVisible(true), 22);
     menuBtn(this, GW / 2, 530, 260, 52, '设置', () => this._settings.setVisible(true), 22);
     this.add.text(GW / 2, 600, best > 0 ? '最高波次：第 ' + best + ' 波 / 5' : '最高波次：—', { fontSize: '16px', color: '#3a2a1c', fontFamily: FONT }).setOrigin(0.5);
-    this.add.text(GW - 16, GH - 16, 'v0.8', { fontSize: '14px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(1, 1);
+    this.add.text(GW - 16, GH - 16, 'v0.9', { fontSize: '14px', color: '#6e4f3a', fontFamily: FONT }).setOrigin(1, 1);
     this._settings = createSettingsOverlay(this, 60);
     this._howto = createHowToOverlay(this, 60);
     this.input.on('pointerdown', () => SFX.ac());
